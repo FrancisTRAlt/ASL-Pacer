@@ -1,93 +1,71 @@
-let classifier;
-let handPose;
 let video;
+let handPose;
 let hands = [];
-let classification = "";
-let isModelLoaded = false;
+let img;
+
+let buttonX, buttonY, buttonW, buttonH;
 
 function preload() {
-  // Load the handPose model
-  handPose = ml5.handPose();
+  handPose = ml5.handPose({ flipped: true });
+  img = loadImage('./assets/Background.avif');
 }
 
-function setup() {
-  createCanvas(640, 480);
-
-  // Create the webcam video and hide it
-  video = createCapture(VIDEO);
-  video.size(640, 480);
-  video.hide();
-
-  // For this example to work across all browsers
-  // "webgl" or "cpu" needs to be set as the backend
-  ml5.setBackend("webgl");
-
-  // Set up the neural network
-  let classifierOptions = {
-    task: "classification",
-  };
-  classifier = ml5.neuralNetwork(classifierOptions);
-
-//   let modelDetails = {
-//     model: "model/model.json",
-//     metadata: "model/model_meta.json",
-//     weights: "model/model.weights.bin",
-//   };
-
-//   classifier.load(modelDetails, modelLoaded);
-
-  // Start the handPose detection
-  handPose.detectStart(video, gotHands);
-}
-
-function draw() {
-  //Display the webcam video
-  image(video, 0, 0, width, height);
-
-  // Draw the handPose keypoints
-  if (hands[0]) {
-    let hand = hands[0];
-    for (let i = 0; i < hand.keypoints.length; i++) {
-      let keypoint = hand.keypoints[i];
-      fill(0, 255, 0);
-      noStroke();
-      circle(keypoint.x, keypoint.y, 10);
-    }
-  }
-
-  // If the model is loaded, make a classification and display the result
-  if (isModelLoaded && hands[0]) {
-    let inputData = flattenHandData();
-    classifier.classify(inputData, gotClassification);
-    textSize(64);
-    fill(0, 255, 0);
-    text(classification, 20, 60);
-  }
-}
-
-// convert the handPose data to a 1D array
-function flattenHandData() {
-  let hand = hands[0];
-  let handData = [];
-  for (let i = 0; i < hand.keypoints.length; i++) {
-    let keypoint = hand.keypoints[i];
-    handData.push(keypoint.x);
-    handData.push(keypoint.y);
-  }
-  return handData;
-}
-
-// Callback function for when handPose outputs data
 function gotHands(results) {
   hands = results;
 }
 
-// Callback function for when the classifier makes a classification
-function gotClassification(results) {
-  classification = results[0].label;
+function setup() {
+  createCanvas(640, 480);
+  video = createCapture(VIDEO, { flipped: true });
+  video.hide();
+
+  handPose.detectStart(video, gotHands);
+
+  // Button setup
+  buttonW = 200;
+  buttonH = 80;
+  buttonX = width / 2 - buttonW / 2;
+  buttonY = height - 150;
 }
 
-// Callback function for when the pre-trained model is loaded
-function modelLoaded() {
-  isModelLoaded = true;
+function draw() {
+  background(img);
+  image(video, 0, 0);
+
+  // Draw button
+  fill(0, 150, 255);
+  rect(buttonX, buttonY, buttonW, buttonH);
+  fill(255);
+  textAlign(CENTER, CENTER);
+  textSize(24);
+  text("Start Game", buttonX + buttonW / 2, buttonY + buttonH / 2);
+
+  if (hands.length > 0) {
+    let hand = hands[0];
+    let index = hand.index_finger_tip;
+    let thumb = hand.thumb_tip;
+
+    // Draw purple dot
+    noStroke();
+    fill(255, 0, 255);
+
+    // Distance between fingers
+    let d = dist(index.x, index.y, thumb.x, thumb.y);
+    let x = ((index.x + thumb.x) * 0.5);
+    let y = ((index.y + thumb.y) * 0.5);
+    // Hover + Pinch condition
+    if (x > buttonX && x < buttonX + buttonW && y > buttonY && y < buttonY + buttonH && d < 35) {
+      fill(255, 255, 0);
+      rect(buttonX, buttonY, buttonW, buttonH);
+      text("Start Game", buttonX + buttonW / 2, buttonY + buttonH / 2);
+
+      startGame();
+    }
+    
+    circle(x, y, 16);
+  }
+}
+
+function startGame() {
+  console.log("Game Started!");
 }

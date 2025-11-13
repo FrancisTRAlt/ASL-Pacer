@@ -13,7 +13,7 @@ A Machine Learning game that captures ASL.
 A step by step guide that will tell you how to get the development environment up and running for this project.
 Open the project in VScode and do the following:
 ```
-$ cd tauri-app
+$ cd ProjectASL
 $ npm install
 $ npm run tauri dev
 ```

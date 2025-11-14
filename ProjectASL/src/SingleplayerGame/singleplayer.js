@@ -6,45 +6,31 @@ let classification = "";
 let isModelLoaded = false;
 
 function preload() {
-  // Load the handPose model
   handPose = ml5.handPose();
 }
 
 function setup() {
-  createCanvas(640, 480);
+  createCanvas(windowWidth, windowHeight);
 
-  // Create the webcam video and hide it
+  // Create webcam video and hide it
   video = createCapture(VIDEO);
-  video.size(640, 480);
+  video.size(windowWidth, windowHeight);
   video.hide();
 
-  // For this example to work across all browsers
-  // "webgl" or "cpu" needs to be set as the backend
   ml5.setBackend("webgl");
 
-  // Set up the neural network
-  let classifierOptions = {
-    task: "classification",
-  };
+  let classifierOptions = { task: "classification" };
   classifier = ml5.neuralNetwork(classifierOptions);
 
-//   let modelDetails = {
-//     model: "model/model.json",
-//     metadata: "model/model_meta.json",
-//     weights: "model/model.weights.bin",
-//   };
+  // Uncomment if loading a pre-trained model
+  // classifier.load(modelDetails, modelLoaded);
 
-//   classifier.load(modelDetails, modelLoaded);
-
-  // Start the handPose detection
   handPose.detectStart(video, gotHands);
 }
 
 function draw() {
-  //Display the webcam video
   image(video, 0, 0, width, height);
 
-  // Draw the handPose keypoints
   if (hands[0]) {
     let hand = hands[0];
     for (let i = 0; i < hand.keypoints.length; i++) {
@@ -55,7 +41,6 @@ function draw() {
     }
   }
 
-  // If the model is loaded, make a classification and display the result
   if (isModelLoaded && hands[0]) {
     let inputData = flattenHandData();
     classifier.classify(inputData, gotClassification);
@@ -65,7 +50,6 @@ function draw() {
   }
 }
 
-// convert the handPose data to a 1D array
 function flattenHandData() {
   let hand = hands[0];
   let handData = [];
@@ -77,17 +61,20 @@ function flattenHandData() {
   return handData;
 }
 
-// Callback function for when handPose outputs data
 function gotHands(results) {
   hands = results;
 }
 
-// Callback function for when the classifier makes a classification
 function gotClassification(results) {
   classification = results[0].label;
 }
 
-// Callback function for when the pre-trained model is loaded
 function modelLoaded() {
   isModelLoaded = true;
+}
+
+// Handle window resize
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  video.size(windowWidth, windowHeight);
 }

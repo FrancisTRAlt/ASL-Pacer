@@ -12,7 +12,9 @@
       {
         "title": "projectasl",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "resizable": false,
+        "maximizable": false
       }
     ],
     "security": {

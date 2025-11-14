@@ -6,14 +6,14 @@ let classification = "";
 let isModelLoaded = false;
 
 function preload() {
-  handPose = ml5.handPose();
+  handPose = ml5.handPose({ flipped: true });
 }
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
 
   // Create webcam video and hide it
-  video = createCapture(VIDEO);
+  video = createCapture(VIDEO, { flipped: true });
   video.size(windowWidth, windowHeight);
   video.hide();
 

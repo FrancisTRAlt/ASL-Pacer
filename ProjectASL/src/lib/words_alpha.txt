@@ -16,7 +16,6 @@ Acrylic
 Actress
 Adaptor
 Address
-Adjourn
 Admiral
 Advance
 Advisor
@@ -30,7 +29,6 @@ Against
 Ageless
 Agendum
 Agility
-Agonize
 Ailment
 Airdrop
 Airfare
@@ -63,7 +61,6 @@ Alumnus
 Alveoli
 Amadeus
 Amateur
-Amazing
 Ambient
 Ambling
 Amenity
@@ -76,7 +73,6 @@ Amplify
 Anagram
 Analogy
 Analyst
-Analyze
 Anarchy
 Anatomy
 Anchovy
@@ -180,7 +176,6 @@ Biscuit
 Blocker
 Blossom
 Blowout
-Bluejay
 Blueray
 Boycott
 Bravery
@@ -302,8 +297,6 @@ Confuse
 Congeal
 Conical
 Conifer
-Conjoin
-Conjure
 Connect
 Conquer
 Console
@@ -335,7 +328,6 @@ Cowhide
 Cracker
 Crapper
 Crawler
-Crazily
 Creator
 Crewcut
 Crimson
@@ -437,7 +429,6 @@ Disdain
 Disease
 Diseuse
 Disgust
-Disjoin
 Dislike
 Dismast
 Dismiss
@@ -561,7 +552,6 @@ Forward
 Foxhole
 Fragile
 Frantic
-Freezer
 Freckle
 Freedom
 Freeway
@@ -631,7 +621,6 @@ Iceberg
 Iceland
 Icicles
 Ideally
-Idolize
 Illicit
 Illness
 Imagine
@@ -690,15 +679,6 @@ Involve
 Islamic
 Islands
 Isolate
-Itemize
-Jamaica
-January
-Jasmine
-Jealous
-Jewelry
-Journey
-Justice
-Justify 
 Kennedy
 Keyhole
 Keynote
@@ -738,7 +718,6 @@ Magnify
 Mailbag
 Mailbox
 Mailman
-Majesty
 Malaria
 Maldive
 Manager
@@ -865,7 +844,6 @@ Overall
 Package
 Painful
 Painter
-Pajamas
 Pandora
 Panther
 Paradox
@@ -933,7 +911,6 @@ Presume
 Preteen
 Pretend
 Pretest
-Pretzel
 Prevail
 Prevent
 Preverb
@@ -965,7 +942,6 @@ Profile
 Profuse
 Progeny
 Program
-Project
 Prolate
 Proline
 Prolong
@@ -1037,7 +1013,6 @@ Rattler
 Ravioli 
 Reactor
 Reality
-Realize
 Rebuild
 Receipt
 Receive
@@ -1069,7 +1044,6 @@ Regatta
 Regimen
 Regular
 Reissue
-Rejoice
 Related
 Relaxer
 Relearn
@@ -1140,7 +1114,6 @@ Sidearm
 Sincere
 Sitdown
 Sixteen
-Skijump
 Skimask
 Skipole
 Skypark
@@ -1168,7 +1141,6 @@ Stirrup
 Streams
 Strides
 Student
-Subject
 Subsist
 Subtext
 Succeed
@@ -1368,4 +1340,3 @@ Worldly
 Worship
 Wrestle
 Wronged
-Zealous

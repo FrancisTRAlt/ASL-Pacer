@@ -1,80 +1,94 @@
-let classifier;
-let handPose;
-let video;
-let hands = [];
-let classification = "";
-let isModelLoaded = false;
+// ---------------- GLOBAL STATE ----------------
+let video, handPose, hands = [];
 
+// Loading state
+let isLoading = true;
+let progress = 0;
+
+// ---------------- PRELOAD ----------------
 function preload() {
-  handPose = ml5.handPose({ flipped: true });
+  handPose = ml5.handPose({solutionPath: '../ml5Model/model_meta.json'}, { flipped: true });
 }
 
+// ---------------- SETUP ----------------
 function setup() {
-  createCanvas(windowWidth, windowHeight);
+  createCanvas(800, 600);
+  noCursor();
 
-  // Create webcam video and hide it
+  // Webcam setup
   video = createCapture(VIDEO, { flipped: true });
-  video.size(windowWidth, windowHeight);
+  video.size(640, 480);
   video.hide();
 
-  ml5.setBackend("webgl");
+  // Hand detection
+  handPose.detectStart(video, results => {
+    hands = results;
+    if (isLoading && hands.length > 0) isLoading = false;
+  });
 
-  let classifierOptions = { task: "classification" };
-  classifier = ml5.neuralNetwork(classifierOptions);
-
-  // Uncomment if loading a pre-trained model
-  // classifier.load(modelDetails, modelLoaded);
-
-  handPose.detectStart(video, gotHands);
+  // Simulate loading progress
+  let progressInterval = setInterval(() => {
+    if (progress < 100) progress += 2;
+    if (progress >= 100 || !isLoading) {
+      progress = 100;
+      clearInterval(progressInterval);
+      isLoading = false;
+    }
+  }, 50);
 }
 
+// ---------------- DRAW ----------------
 function draw() {
-  image(video, 0, 0, width, height);
+  if (isLoading) {
+    drawLoadingScreen();
+    return;
+  }
 
-  if (hands[0]) {
-    let hand = hands[0];
-    for (let i = 0; i < hand.keypoints.length; i++) {
-      let keypoint = hand.keypoints[i];
-      fill(0, 255, 0);
+  drawPixelatedVideo();
+}
+
+// ---------------- LOADING SCREEN ----------------
+function drawLoadingScreen() {
+  background(30);
+  textAlign(CENTER, CENTER);
+  textSize(36);
+  fill(255);
+  text("Loading...", width / 2, height / 2 - 50);
+
+  const barWidth = 400, barHeight = 30;
+  const barX = width / 2 - barWidth / 2;
+  const barY = height / 2;
+
+  fill(80);
+  rect(barX, barY, barWidth, barHeight, 10);
+
+  fill(135, 206, 235);
+  const fillWidth = map(progress, 0, 100, 0, barWidth);
+  rect(barX, barY, fillWidth, barHeight, 10);
+
+  fill(255);
+  textSize(20);
+  text(`${progress}%`, width / 2, barY + barHeight + 25);
+}
+
+// ---------------- PIXELATED VIDEO ----------------
+function drawPixelatedVideo() {
+  const pixelSize = 20;
+  video.loadPixels();
+
+  for (let y = 0; y < video.height; y += pixelSize) {
+    for (let x = 0; x < video.width; x += pixelSize) {
+      const i = (y * video.width + x) * 4;
+      const r = video.pixels[i], g = video.pixels[i + 1], b = video.pixels[i + 2];
+
+      fill(r, g, b);
       noStroke();
-      circle(keypoint.x, keypoint.y, 10);
+      rect(
+        map(x, 0, video.width, 0, width),
+        map(y, 0, video.height, 0, height),
+        map(pixelSize, 0, video.width, 0, width),
+        map(pixelSize, 0, video.height, 0, height)
+      );
     }
   }
-
-  if (isModelLoaded && hands[0]) {
-    let inputData = flattenHandData();
-    classifier.classify(inputData, gotClassification);
-    textSize(64);
-    fill(0, 255, 0);
-    text(classification, 20, 60);
-  }
-}
-
-function flattenHandData() {
-  let hand = hands[0];
-  let handData = [];
-  for (let i = 0; i < hand.keypoints.length; i++) {
-    let keypoint = hand.keypoints[i];
-    handData.push(keypoint.x);
-    handData.push(keypoint.y);
-  }
-  return handData;
-}
-
-function gotHands(results) {
-  hands = results;
-}
-
-function gotClassification(results) {
-  classification = results[0].label;
-}
-
-function modelLoaded() {
-  isModelLoaded = true;
-}
-
-// Handle window resize
-function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
-  video.size(windowWidth, windowHeight);
 }

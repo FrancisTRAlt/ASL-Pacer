@@ -4,10 +4,19 @@ let video, handPose, hands = [];
 // Loading state
 let isLoading = true;
 let progress = 0;
+let modelLoaded = false;
 
 // ---------------- PRELOAD ----------------
 function preload() {
-  handPose = ml5.handPose({solutionPath: '../ml5Model/model_meta.json'}, { flipped: true });
+  console.log("Loading custom model from:", '../ml5Model/model_meta.json');
+  handPose = ml5.handPose(
+    { solutionPath: '../ml5Model/model_meta.json' },
+    { flipped: true },
+    () => {
+      console.log("Custom model initialized successfully!");
+      modelLoaded = true;
+    }
+  );
 }
 
 // ---------------- SETUP ----------------
@@ -23,13 +32,18 @@ function setup() {
   // Hand detection
   handPose.detectStart(video, results => {
     hands = results;
-    if (isLoading && hands.length > 0) isLoading = false;
+    console.log("Detection results:", hands);
+
+    if (isLoading && hands.length > 0) {
+      console.log("Hands detected! Model is working.");
+      isLoading = false;
+    }
   });
 
   // Simulate loading progress
   let progressInterval = setInterval(() => {
     if (progress < 100) progress += 2;
-    if (progress >= 100 || !isLoading) {
+    if (progress >= 100 || (!isLoading && modelLoaded)) {
       progress = 100;
       clearInterval(progressInterval);
       isLoading = false;
@@ -69,6 +83,12 @@ function drawLoadingScreen() {
   fill(255);
   textSize(20);
   text(`${progress}%`, width / 2, barY + barHeight + 25);
+
+  if (!modelLoaded) {
+    textSize(16);
+    fill(255, 100, 100);
+    text("Waiting for model to load...", width / 2, barY + barHeight + 55);
+  }
 }
 
 // ---------------- PIXELATED VIDEO ----------------

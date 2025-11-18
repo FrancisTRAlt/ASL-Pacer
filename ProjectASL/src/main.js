@@ -35,7 +35,7 @@ function setup() {
 
   // Setup webcam capture
   video = createCapture(VIDEO, { flipped: true });
-  video.size(640, 480);
+  video.size(800, 600);
   video.hide();
 
   // Start hand detection

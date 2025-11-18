@@ -3,7 +3,7 @@ let video, handPose, hands = [];
 
 // UI elements and state
 let buttons = []; // Array of button objects
-let currentPage = "menu"; // Tracks current page (menu/game options)
+let currentPage = "cameraCheck"; // Tracks current page (menu/game options)
 
 // Gesture interaction state
 let lastPinch = false;
@@ -23,16 +23,53 @@ let progress = 0; // Progress bar percentage
 let isFading = false;
 let fadeAlpha = 0;
 
+
+async function checkCameraAccess() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream.getTracks().forEach(track => track.stop()); // Stop after check
+    return true;
+  } catch (err) {
+    console.error("Camera access denied or unavailable:", err);
+    return false;
+  }
+}
+
 // ---------------- PRELOAD ----------------
 function preload() {
   handPose = ml5.handPose({ flipped: true });
 }
 
 // ---------------- SETUP ----------------
-function setup() {
+async function setup() {
   createCanvas(800, 600);
-  noCursor();
 
+  const cameraAvailable = await checkCameraAccess();
+
+  if (!cameraAvailable) {
+    background(0);
+    textAlign(CENTER, CENTER);
+    textSize(28);
+    fill("SkyBlue");
+    text("This game requires a camera. Please enable.", width / 2, height / 2);
+
+    // Create Retry Button
+    retryButton = createButton("Retry");
+    retryButton.position(width / 2 - 75, height / 2 + 40);
+    retryButton.size(150, 50);
+    retryButton.mousePressed(async () => {
+      const retry = await checkCameraAccess();
+      if (retry) {
+        retryButton.remove(); // Remove button after success
+        window.reload();
+      }
+    });
+
+    noLoop();
+    return;
+  }
+  noCursor();
+  currentPage = "menu";
   // Setup webcam capture
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
@@ -51,7 +88,7 @@ function setup() {
   // Simulate loading progress until complete
   let progressInterval = setInterval(() => {
     if (progress < 100) progress += 2; // Increment progress
-    if (progress >= 100 || !isLoading) {
+    if (progress >= 100 || !isLoading) { //Loading Complete
       progress = 100;
       clearInterval(progressInterval);
       isLoading = false;
@@ -61,12 +98,15 @@ function setup() {
 
 // ---------------- DRAW ----------------
 function draw() {
-  if (isLoading) {
+  if (isLoading && currentPage !== "cameraCheck") {
     drawLoadingScreen();
     return;
   }
-  drawPixelatedVideo();
-  drawTitle();
+
+  if (currentPage !== "cameraCheck") {
+    drawPixelatedVideo();
+    drawTitle();
+  }
 
   if (currentPage === "singlePlayerInstruc") {
     drawInstructions();
@@ -74,8 +114,30 @@ function draw() {
     drawButtons();
   }
 
+  if (currentPage === "credits") {
+    fill(0);
+    rect(width / 4, height / 4 - 50, width / 2, 170, 20); // Rounded c
+    
+    // Title
+    textSize(48);
+    fill("SkyBlue");
+    text("Credits", width / 2, height / 4);
+
+    // Credits List
+    textSize(28);
+    fill("SkyBlue");
+    text("Developed by: Francis Tran", width / 2, height / 2 - 80);
+
+    // Footer
+    textSize(20);
+    fill(180);
+    text("© 2025 ASL Pacer Project", width / 2, height - 70);
+  }
+
+  // HandPose Mouse
   if (hands.length > 0) handleHandInteraction(0, 0, video.width, video.height);
 
+  // Fading transition
   if (isFading) {
     fadeAlpha = min(fadeAlpha + 10, 255);
     fill(0, fadeAlpha);
@@ -187,7 +249,7 @@ function highlightButton(btn) {
 function setupMenuButtons() {
   buttons = [
     createButtonObj("Start Game", width / 2 - 100, height / 2 - 100, 200, 80, () => showGameOptions()),
-    createButtonObj("Exit", width / 2 - 100, height / 2, 200, 80, () => window.close())
+    createButtonObj("Credits", width / 2 - 100, height / 2, 200, 80, () => showCredits())
   ];
 }
 
@@ -198,6 +260,16 @@ function showGameOptions() {
       showSinglePlayerInstruc();
     }),
     createButtonObj("Multiplayer", width / 2 + 20, height / 2 - 100, 200, 80, () => console.log("Multiplayer Selected")),
+    createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => {
+      currentPage = "menu";
+      setupMenuButtons();
+    })
+  ];
+}
+
+function showCredits() {
+  currentPage = "credits";
+  buttons = [
     createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => {
       currentPage = "menu";
       setupMenuButtons();

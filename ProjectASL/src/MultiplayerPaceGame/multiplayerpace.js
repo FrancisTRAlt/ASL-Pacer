@@ -1,180 +1,201 @@
+
 // ---------------- GLOBAL STATE ----------------
 let video, handPose, hands = [];
 let classifier;
 let classification = "???";
 let confidence = 0;
 let connections;
-// Game states: menu → room → countdown → game → gameover
 let currentState = "menu";
 let countdownStartTime = null;
 let startTime = null;
-let gameDuration = 60000; // 1 minute
+let gameDuration = 60000;
 let playerScore = 0;
 let playerName = "";
 let roomId = null;
-// Word game state
+let playerId = null;
 let words = [];
 let currentWord = "";
 let currentIndex = 0;
-// Buttons
 let buttons = [];
 let readyButton;
-let roomInput; // NEW: Input field for room ID
-// MQTT
+let roomInput;
 let client;
-let players = {}; // { playerId: { name, score, lastUpdate } }
+let players = {}; // { playerId: { name, score, ready, lastUpdate } }
 const brokerUrl = "wss://test.mosquitto.org:8081";
 let clientId = `client_${Math.random().toString(16).slice(2)}`;
 let errorMessage = "";
 let errorTimer = 0;
+const HEARTBEAT_INTERVAL = 10000; // 10s
+const PLAYER_TIMEOUT = 30000; // 30s
+
 
 // ---------------- PRELOAD ----------------
+
 function preload() {
   handPose = ml5.handPose({ flipped: true });
   words = loadStrings("../lib/words_alpha.txt");
 }
 
+
 // ---------------- SETUP ----------------
+
 function setup() {
   createCanvas(800, 600);
   roomInput = createInput('');
-  roomInput.hide(); // Hide initially
+  roomInput.hide();
   playerName = "Player" + floor(random(1000, 9999));
-  // Webcam setup
+
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
   ml5.setBackend("webgl");
-  // Neural network setup
-  let classifierOptions = { task: "classification" };
-  classifier = ml5.neuralNetwork(classifierOptions);
-  let modelDetails = {
+
+  classifier = ml5.neuralNetwork({ task: "classification" });
+  classifier.load({
     model: "../ml5Model/model.json",
     metadata: "../ml5Model/model_meta.json",
     weights: "../ml5Model/model.weights.bin",
-  };
-  classifier.load(modelDetails, modelLoaded);
+  }, modelLoaded);
+
   handPose.detectStart(video, gotHands);
   connections = handPose.getConnections();
-  // Initialize MQTT
+
   setupMQTT();
-  // Initialize first word
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
+
+  // Heartbeat loop
+  setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
+  setInterval(cleanInactivePlayers, HEARTBEAT_INTERVAL);
 }
+
 
 // ---------------- MQTT SETUP ----------------
 function setupMQTT() {
-  client = mqtt.connect(brokerUrl);
-  client.on("connect", () => {
-    console.log("Connected to MQTT broker");
-  });
-  client.on("message", (topic, message) => {
-    if (topic.endsWith("/players")) {
-      players = JSON.parse(message.toString());
-    } else if (topic.endsWith("/start")) {
-      startCountdown();
-    }
-  });
+  client = mqtt.connect(brokerUrl, { clean: true });
+  client.on("connect", () => console.log("Connected to MQTT broker"));
+  client.on("message", handleMQTTMessage);
 }
 
 function handleMQTTMessage(topic, message) {
   try {
     const data = JSON.parse(message.toString());
-    if (topic === "game/players/update") {
-      const { playerId, name, score, timestamp } = data;
-      if (!playerId || !name || typeof score !== "number") return;
-      if (!players[playerId]) {
-        players[playerId] = { name, score, lastUpdate: timestamp };
-      } else {
-        players[playerId].score = score;
-        players[playerId].lastUpdate = timestamp;
-      }
-    }
-    if (topic === "game/players/remove") {
-      const { playerId } = data;
-      if (players[playerId]) delete players[playerId];
+    if (topic.endsWith("/players/update")) {
+      const { playerId, name, score, ready, timestamp } = data;
+      if (!playerId || !name) return;
+      players[playerId] = { name, score, ready, lastUpdate: timestamp };
+    } else if (topic.endsWith("/players")) {
+      const snapshot = JSON.parse(message.toString());
+      players = { ...players, ...snapshot };
+    } else if (topic.endsWith("/start")) {
+      startCountdown();
+    } else if (topic.endsWith("/ping")) {
+      const { playerId, timestamp } = data;
+      if (players[playerId]) players[playerId].lastUpdate = timestamp;
     }
   } catch (err) {
     console.error("Invalid MQTT message:", err);
   }
 }
 
-function joinRoom(id) {
-  if (id !== null) {
-    roomId = id;
-    if (Object.keys(players).length >= 10) {
-      alert("Room is full! Maximum 10 players allowed.");
-      return;
-    }
-    currentState = "room";
-    roomInput.hide();
-    client.subscribe(`game/rooms/${roomId}/#`);
-    addPlayer(playerName);
-    buttons.forEach(btn => {
-      if (["Create Room", "Join Room", "Main Menu"].includes(btn.label)) {
-        btn.visible = false;
-      }
-    });
-  }
+
+
+function sendHeartbeat() {
+  if (!roomId || !playerId) return;
+  client.publish(`game/rooms/${roomId}/ping`, JSON.stringify({
+    playerId,
+    timestamp: Date.now()
+  }));
 }
 
-function addPlayer(name) {
-  const playerId = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  players[playerId] = {
-    name: name,
-    score: 0,
-    lastUpdate: Date.now()
-  };
-  client.publish("game/players/update", JSON.stringify({
-    playerId,
-    name: players[playerId].name,
-    score: players[playerId].score,
-    timestamp: players[playerId].lastUpdate
-  }));
-  return playerId;
+function cleanInactivePlayers() {
+  const now = Date.now();
+  let removed = false;
+  for (let id in players) {
+    if (now - players[id].lastUpdate > PLAYER_TIMEOUT) {
+      delete players[id];
+      removed = true;
+    }
+  }
+  if (removed) publishPlayers();
 }
+
+function joinRoom(id) {
+  if (!id) return;
+  roomId = id;
+  if (Object.keys(players).length >= 10) {
+    alert("Room is full! Maximum 10 players allowed.");
+    return;
+  }
+  currentState = "room";
+  roomInput.hide();
+  client.subscribe(`game/rooms/${roomId}/#`);
+  playerId = addPlayer(playerName);
+  publishPlayers();
+  buttons.forEach(btn => {
+    if (["Create Room", "Join Room", "Main Menu"].includes(btn.label)) {
+      btn.visible = false;
+    }
+  });
+}
+
+
+function addPlayer(name) {
+  const id = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  players[id] = { name, score: 0, ready: false, lastUpdate: Date.now() };
+  client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
+    playerId: id,
+    name,
+    score: 0,
+    ready: false,
+    timestamp: Date.now()
+  }));
+  return id;
+}
+
+
 
 function publishPlayers() {
   client.publish(`game/rooms/${roomId}/players`, JSON.stringify(players), { retain: true });
 }
 
+
 function setReady() {
-  let player = Object.values(players).find(p => p.name === playerName);
-  if (player) {
-    player.ready = !player.ready;
-    readyButton.label = player.ready ? "Unready" : "Ready";
-    publishPlayers();
-    if (Object.values(players).every(p => p.ready) && (currentState === "gameover" || currentState === "room")) {
-      restartGame();
-    }
+  if (!playerId || !players[playerId]) return;
+  players[playerId].ready = !players[playerId].ready;
+  readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+  client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
+    playerId,
+    name: players[playerId].name,
+    score: players[playerId].score,
+    ready: players[playerId].ready,
+    timestamp: Date.now()
+  }));
+  publishPlayers();
+  if (Object.values(players).every(p => p.ready) && (currentState === "room" || currentState === "gameover")) {
+    restartGame();
   }
 }
 
+
 function getRandomLetterAndNumber() {
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const randomCode = Math.floor(Math.random() * 99) +
+  return Math.floor(Math.random() * 99) +
     letters[Math.floor(Math.random() * letters.length)] +
     Math.floor(Math.random() * 99);
-  return randomCode;
 }
 
 // ---------------- DRAW ----------------
 function draw() {
   background(30);
-  if (currentState === "menu") {
-    drawMenu();
-  } else if (currentState === "room") {
-    drawRoom();
-  } else if (currentState === "countdown") {
-    drawCountdown();
-  } else if (currentState === "game") {
-    drawGame();
-  } else if (currentState === "gameover") {
-    drawGameOver();
-  }
+  if (currentState === "menu") drawMenu();
+  else if (currentState === "room") drawRoom();
+  else if (currentState === "countdown") drawCountdown();
+  else if (currentState === "game") drawGame();
+  else if (currentState === "gameover") drawGameOver();
   drawPlayerCount();
 }
+
 
 // ---------------- MENU ----------------
 function drawMenu() {
@@ -224,22 +245,25 @@ function drawRoom() {
   if (!readyButton) {
     readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
   }
-  let player = Object.values(players).find(pl => pl.name === playerName);
-  if (player) readyButton.label = player.ready ? "Unready" : "Ready";
+  if (players[playerId]) readyButton.label = players[playerId].ready ? "Unready" : "Ready";
   readyButton.visible = true;
   readyButton.show();
-  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", () => {
-    currentState = "menu";
-    players = {};
-    roomId = null;
-    roomInput.hide();
-    buttons.forEach(btn => btn.visible = true);
-    readyButton = null;
-  });
+  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
   leaveButton.show();
-  if (mouseIsPressed) {
-    leaveButton.click();
+}
+
+
+function leaveRoom() {
+  if (playerId && players[playerId]) {
+    delete players[playerId];
+    publishPlayers();
   }
+  currentState = "menu";
+  players = {};
+  roomId = null;
+  roomInput.hide();
+  buttons.forEach(btn => btn.visible = true);
+  readyButton = null;
 }
 
 // ---------------- COUNTDOWN ----------------

@@ -327,7 +327,7 @@ function showMultiASLInstruc() {
       isFading = true;
       fadeAlpha = 0;
       setTimeout(() => {
-        window.location.href = "???";
+        window.location.href = "/MultiplayerPaceGame/multiplayerpace.html";
       }, 800);
     }),
     createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {

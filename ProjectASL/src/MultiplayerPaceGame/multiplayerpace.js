@@ -1,3 +1,4 @@
+
 // ---------------- GLOBAL STATE ----------------
 let video, handPose, hands = [];
 let classifier;
@@ -28,13 +29,9 @@ const HEARTBEAT_INTERVAL = 10000; // 10s
 const PLAYER_TIMEOUT = 30000; // 30s
 let lastMatchTime = 0;
 
-// NEW GLOBAL BUTTON REFERENCES
-let leaveButton = null;
-let mainMenuButton = null;
 
 
 // ---------------- PRELOAD ----------------
-
 function preload() {
   handPose = ml5.handPose({ flipped: true });
   words = loadStrings("../lib/words_alpha.txt");
@@ -43,7 +40,6 @@ function preload() {
 
 
 // ---------------- SETUP ----------------
-
 function setup() {
   createCanvas(800, 600);
   roomInput = createInput('');
@@ -69,35 +65,51 @@ function setup() {
 }
 
 
+
 // ---------------- MQTT SETUP ----------------
+
 function setupMQTT() {
   client = mqtt.connect(brokerUrl, { clean: true });
   client.on("connect", () => console.log("Connected to MQTT broker"));
   client.on("message", handleMQTTMessage);
 }
 
+
+
 function handleMQTTMessage(topic, message) {
   try {
     const data = JSON.parse(message.toString());
+
     if (topic.endsWith("/players/update")) {
       const { playerId, name, score, ready, timestamp } = data;
       if (!playerId || !name) return;
       players[playerId] = { name, score, ready, lastUpdate: timestamp };
+
     } else if (topic.endsWith("/players")) {
       const snapshot = JSON.parse(message.toString());
+      // Merge instead of overwrite
       players = { ...players, ...snapshot };
+
+      if (Object.keys(players).length > 10) {
+        alert("Room is full! Maximum 10 players allowed.");
+        leaveRoom();
+        return;
+      }
+
     } else if (topic.endsWith("/start")) {
-      startCountdown();
+      restartGame();
+
     } else if (topic.endsWith("/ping")) {
       const { playerId, timestamp } = data;
       if (players[playerId]) players[playerId].lastUpdate = timestamp;
-    } else if (topic.endsWith("/start")) {
-      restartGame(); // All clients switch to countdown when start signal is received
     }
+
   } catch (err) {
     console.error("Invalid MQTT message:", err);
   }
 }
+
+
 
 
 
@@ -108,6 +120,8 @@ function sendHeartbeat() {
     timestamp: Date.now()
   }));
 }
+
+
 
 function cleanInactivePlayers() {
   const now = Date.now();
@@ -121,24 +135,31 @@ function cleanInactivePlayers() {
   if (removed) publishPlayers();
 }
 
-function joinRoom(id) {
+
+
+async function joinRoom(id) {
   if (!id) return;
+
+  players = {};
   roomId = id;
-  if (Object.keys(players).length >= 10) {
-    alert("Room is full! Maximum 10 players allowed.");
-    return;
-  }
+
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
+
   currentState = "room";
   roomInput.hide();
+
   client.subscribe(`game/rooms/${roomId}/#`);
+
+  // Wait briefly for snapshot before adding player
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   playerId = addPlayer(playerName);
   publishPlayers();
-  buttons.forEach(btn => {
-    if (["Create Room", "Join Room", "Main Menu"].includes(btn.label)) {
-      btn.visible = false;
-    }
-  });
 }
+
+
+
 
 
 function addPlayer(name) {
@@ -156,15 +177,18 @@ function addPlayer(name) {
 
 
 
+
 function publishPlayers() {
   client.publish(`game/rooms/${roomId}/players`, JSON.stringify(players), { retain: true });
 }
+
 
 
 function setReady() {
   if (!playerId || !players[playerId]) return;
   players[playerId].ready = !players[playerId].ready;
   readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+
   client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
     playerId,
     name: players[playerId].name,
@@ -172,19 +196,21 @@ function setReady() {
     ready: players[playerId].ready,
     timestamp: Date.now()
   }));
+
   publishPlayers();
+
   if (Object.values(players).every(p => p.ready)) {
-    // Publish a start signal so all clients begin countdown together
     client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
   }
 }
 
-
 function getRandomLetterAndNumber() {
-  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  return Math.floor(Math.random() * 99) +
-    letters[Math.floor(Math.random() * letters.length)] +
-    Math.floor(Math.random() * 99);
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return "-"+result;
 }
 
 // ---------------- DRAW ----------------
@@ -201,6 +227,7 @@ function draw() {
 
 
 // ---------------- MENU ----------------
+
 function drawMenu() {
   background(30);
   if (errorMessage && millis() - errorTimer < 3000) {
@@ -208,15 +235,101 @@ function drawMenu() {
     textSize(20);
     text(errorMessage, width / 2, height / 2 - 100);
   }
+
   textAlign(CENTER, CENTER);
   textSize(36);
   fill(255);
   text("ASL Multiplayer Lobby", width / 2, height / 2 - 150);
+
   fill(50, 50, 50, 180);
   rect(width / 2 - 160, height / 2 - 80, 320, 180, 15);
+
   roomInput.position(width / 2 - 125, height / 2 - 40);
   roomInput.size(250);
   roomInput.show();
+
+  // ✅ Ensure Join Room button exists
+  if (!buttons.find(b => b.label === "Join Room")) {
+    buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
+      const customCode = roomInput.value().trim();
+      if (!customCode) {
+        errorMessage = "Please enter a Room ID!";
+        errorTimer = millis();
+        return;
+      } else {
+        joinRoom(customCode);
+      }
+    }));
+  }
+
+  // ✅ Ensure Create Room button exists
+  if (!buttons.find(b => b.label === "Create Room")) {
+    buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
+      joinRoom("room" + getRandomLetterAndNumber());
+    }));
+  }
+
+  buttons.forEach(btn => btn.show());
+}
+
+
+// ---------------- ROOM ----------------
+
+function drawRoom() {
+  textAlign(CENTER, TOP);
+  textSize(32);
+  fill(255);
+  text(`Room: ${roomId}`, width / 2, 50);
+
+  let y = 150;
+  Object.values(players).forEach(p => {
+    fill(p.ready ? "green" : "white");
+    text(`${p.name} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
+    y += 40;
+  });
+
+  if (!readyButton) {
+    readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
+  }
+  if (players[playerId]) readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+  readyButton.visible = true;
+  readyButton.show();
+
+  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+  if (!buttons.find(b => b.label === "Leave")) {
+    buttons.push(leaveButton);
+  }
+  leaveButton.show();
+}
+
+
+
+
+function leaveRoom() {
+  console.log("Leaving room...");
+
+  if (playerId && players[playerId]) {
+    delete players[playerId];
+    publishPlayers();
+  }
+
+  if (client && roomId) {
+    client.unsubscribe(`game/rooms/${roomId}/#`);
+    console.log(`Unsubscribed from game/rooms/${roomId}/#`);
+  }
+
+  currentState = "menu";
+  players = {};
+  roomId = null;
+  playerId = null;
+
+  roomInput.hide();
+
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
+
+  readyButton = null;
+
   buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
     const customCode = roomInput.value().trim();
     if (!customCode) {
@@ -230,64 +343,10 @@ function drawMenu() {
   buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
     joinRoom("room" + getRandomLetterAndNumber());
   }));
-  buttons.forEach(btn => btn.show());
-}
-
-// ---------------- ROOM ----------------
-function drawRoom() {
-  textAlign(CENTER, TOP);
-  textSize(32);
-  fill(255);
-  text(`Room: ${roomId}`, width / 2, 50);
-  let y = 150;
-  Object.values(players).forEach(p => {
-    fill(p.ready ? "green" : "white");
-    text(`${p.name} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
-    y += 40;
-  });
-
-  if (!readyButton) {
-    readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
-    buttons.push(readyButton);
-  }
-  if (players[playerId]) readyButton.label = players[playerId].ready ? "Unready" : "Ready";
-  readyButton.visible = true;
-  readyButton.show();
-
-  // Persistent Leave Button
-  if (!leaveButton) {
-    leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
-    buttons.push(leaveButton);
-  }
-  leaveButton.visible = true;
-  leaveButton.show();
 }
 
 
-function leaveRoom() {
-  if (playerId && players[playerId]) {
-    delete players[playerId];
-    publishPlayers();
-  }
-  roomId = null; // Reset before UI draw
-  currentState = "menu";
-  players = {};
-  roomInput.hide();
 
-  // Hide room-specific buttons
-  if (readyButton) readyButton.visible = false;
-  if (leaveButton) leaveButton.visible = false;
-  if (mainMenuButton) mainMenuButton.visible = false;
-
-  readyButton = null;
-  leaveButton = null;
-  mainMenuButton = null;
-
-  // Ensure Main Menu button is visible
-  buttons.forEach(btn => {
-    if (btn.label === "Main Menu") btn.visible = true;
-  });
-}
 
 // ---------------- COUNTDOWN ----------------
 function drawCountdown() {
@@ -374,29 +433,29 @@ function drawGameOver() {
   text("Players & Scores:", width / 2, 150);
   let y = 200;
   Object.values(players).forEach(p => {
-    fill(p.ready ? "green" : "white");
-    text(`${p.name} - ${p.score} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
+    text(`${p.name} - ${p.score}`, width / 2, y);
     y += 40;
   });
-
   if (!readyButton) {
     readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
-    buttons.push(readyButton);
   }
   let player = Object.values(players).find(pl => pl.name === playerName);
   if (player) readyButton.label = player.ready ? "Unready" : "Ready";
   readyButton.visible = true;
   readyButton.show();
-
-  // Persistent Main Menu Button
-  if (!mainMenuButton) {
-    mainMenuButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
-    buttons.push(mainMenuButton);
-  }
-  mainMenuButton.visible = true;
+  let mainMenuButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", () => {
+    currentState = "menu";
+    players = {};
+    roomId = null;
+    roomInput.hide();
+    buttons.forEach(btn => btn.visible = true);
+    readyButton = null;
+  });
   mainMenuButton.show();
+  if (mouseIsPressed) {
+    mainMenuButton.click();
+  }
 }
-
 
 // ---------------- BUTTON CLASS ----------------
 class Button {
@@ -428,12 +487,19 @@ class Button {
   }
 }
 
+
 function mousePressed() {
-  buttons.forEach(btn => {
-    if (btn.visible) btn.click();
-  });
-  if (readyButton && readyButton.visible) readyButton.click();
+  for (let btn of buttons) {
+    if (btn.visible && btn.isHovered()) {
+      btn.click();
+      return;
+    }
+  }
+  if (readyButton && readyButton.visible && readyButton.isHovered()) {
+    readyButton.click();
+  }
 }
+
 
 // ---------------- CALLBACKS ----------------
 function gotHands(results) {
@@ -484,33 +550,23 @@ function startCountdown() {
 
 function endGame() {
   currentState = "gameover";
+
+  // Reset all players to not ready
   Object.values(players).forEach(p => p.ready = false);
   publishPlayers();
+
+  // Reset readyButton label
   if (readyButton) readyButton.label = "Ready";
 }
 
 function restartGame() {
   currentState = "countdown";
   countdownStartTime = millis();
-  
-  // Reset local score
   playerScore = 0;
-
-  // Reset all players' scores and readiness
-  Object.values(players).forEach(p => {
-    p.ready = false;
-    p.score = 0;
-  });
-
-  // Publish updated player data
+  Object.values(players).forEach(p => { p.ready = false; p.score = 0; });
   publishPlayers();
-
-  // Reset word and progress
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
-  classification = ""; // Clear leftover classification
-
-  // Reset button state
   readyButton = null;
 }
 

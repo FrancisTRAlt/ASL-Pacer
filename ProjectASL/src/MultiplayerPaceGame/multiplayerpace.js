@@ -27,6 +27,7 @@ let errorMessage = "";
 let errorTimer = 0;
 const HEARTBEAT_INTERVAL = 10000; // 10s
 const PLAYER_TIMEOUT = 30000; // 30s
+let lastMatchTime = 0;
 
 
 // ---------------- PRELOAD ----------------
@@ -420,26 +421,36 @@ function gotHands(results) {
   hands = results;
 }
 
+
 function gotClassification(results) {
   let sum = results.reduce((acc, r) => acc + r.confidence, 0);
   let normalized = results.map(r => ({ label: r.label, confidence: r.confidence / sum }));
   normalized.sort((a, b) => b.confidence - a.confidence);
+
   if (normalized[0].confidence >= 0.6) {
-    classification = normalized[0].label;
+    let now = millis();
     let expectedLetter = currentWord[currentIndex];
-    if (classification === expectedLetter) {
+
+    // Check if classification matches expected letter and cooldown passed
+    if (normalized[0].label === expectedLetter && now - lastMatchTime > 500) {
       currentIndex++;
+      lastMatchTime = now;
+      classification = ""; // Reset to prevent repeated triggers
+
       if (currentIndex >= currentWord.length) {
         playerScore++;
         let player = Object.values(players).find(p => p.name === playerName);
         if (player) player.score = playerScore;
         publishPlayers();
+
+        // Load next word
         currentWord = random(words).toUpperCase();
         currentIndex = 0;
       }
     }
   }
 }
+
 
 function modelLoaded() {
   buttons.push(new Button(width / 2 - 100, height / 2 + 150, 200, 60, "Main Menu", () => {
@@ -454,6 +465,13 @@ function startCountdown() {
 
 function endGame() {
   currentState = "gameover";
+
+  // Reset all players to not ready
+  Object.values(players).forEach(p => p.ready = false);
+  publishPlayers();
+
+  // Reset readyButton label
+  if (readyButton) readyButton.label = "Ready";
 }
 
 function restartGame() {

@@ -1,4 +1,3 @@
-
 // ---------------- GLOBAL STATE ----------------
 let video, handPose, hands = [];
 let classifier;
@@ -29,6 +28,10 @@ const HEARTBEAT_INTERVAL = 10000; // 10s
 const PLAYER_TIMEOUT = 30000; // 30s
 let lastMatchTime = 0;
 
+// NEW GLOBAL BUTTON REFERENCES
+let leaveButton = null;
+let mainMenuButton = null;
+
 
 // ---------------- PRELOAD ----------------
 
@@ -38,6 +41,7 @@ function preload() {
 }
 
 
+
 // ---------------- SETUP ----------------
 
 function setup() {
@@ -45,27 +49,21 @@ function setup() {
   roomInput = createInput('');
   roomInput.hide();
   playerName = "Player" + floor(random(1000, 9999));
-
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
   ml5.setBackend("webgl");
-
   classifier = ml5.neuralNetwork({ task: "classification" });
   classifier.load({
     model: "../ml5Model/model.json",
     metadata: "../ml5Model/model_meta.json",
     weights: "../ml5Model/model.weights.bin",
   }, modelLoaded);
-
   handPose.detectStart(video, gotHands);
   connections = handPose.getConnections();
-
   setupMQTT();
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
-
-  // Heartbeat loop
   setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
   setInterval(cleanInactivePlayers, HEARTBEAT_INTERVAL);
 }
@@ -201,6 +199,7 @@ function draw() {
 }
 
 
+
 // ---------------- MENU ----------------
 function drawMenu() {
   background(30);
@@ -246,13 +245,21 @@ function drawRoom() {
     text(`${p.name} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
     y += 40;
   });
+
   if (!readyButton) {
     readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
+    buttons.push(readyButton);
   }
   if (players[playerId]) readyButton.label = players[playerId].ready ? "Unready" : "Ready";
   readyButton.visible = true;
   readyButton.show();
-  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+
+  // Persistent Leave Button
+  if (!leaveButton) {
+    leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+    buttons.push(leaveButton);
+  }
+  leaveButton.visible = true;
   leaveButton.show();
 }
 
@@ -266,8 +273,21 @@ function leaveRoom() {
   players = {};
   roomId = null;
   roomInput.hide();
-  buttons.forEach(btn => btn.visible = true);
+
+  // Hide only room/game-specific buttons
+  if (readyButton) readyButton.visible = false;
+  if (leaveButton) leaveButton.visible = false;
+  if (mainMenuButton) mainMenuButton.visible = false;
+
+  // Reset references for room/game buttons
   readyButton = null;
+  leaveButton = null;
+  mainMenuButton = null;
+
+  // Keep global buttons (like Main Menu) visible
+  buttons.forEach(btn => {
+    if (btn.label === "Main Menu") btn.visible = true;
+  });
 }
 
 // ---------------- COUNTDOWN ----------------
@@ -355,29 +375,29 @@ function drawGameOver() {
   text("Players & Scores:", width / 2, 150);
   let y = 200;
   Object.values(players).forEach(p => {
-    text(`${p.name} - ${p.score}`, width / 2, y);
+    fill(p.ready ? "green" : "white");
+    text(`${p.name} - ${p.score} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
     y += 40;
   });
+
   if (!readyButton) {
     readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
+    buttons.push(readyButton);
   }
   let player = Object.values(players).find(pl => pl.name === playerName);
   if (player) readyButton.label = player.ready ? "Unready" : "Ready";
   readyButton.visible = true;
   readyButton.show();
-  let mainMenuButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", () => {
-    currentState = "menu";
-    players = {};
-    roomId = null;
-    roomInput.hide();
-    buttons.forEach(btn => btn.visible = true);
-    readyButton = null;
-  });
-  mainMenuButton.show();
-  if (mouseIsPressed) {
-    mainMenuButton.click();
+
+  // Persistent Main Menu Button
+  if (!mainMenuButton) {
+    mainMenuButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+    buttons.push(mainMenuButton);
   }
+  mainMenuButton.visible = true;
+  mainMenuButton.show();
 }
+
 
 // ---------------- BUTTON CLASS ----------------
 class Button {
@@ -465,12 +485,8 @@ function startCountdown() {
 
 function endGame() {
   currentState = "gameover";
-
-  // Reset all players to not ready
   Object.values(players).forEach(p => p.ready = false);
   publishPlayers();
-
-  // Reset readyButton label
   if (readyButton) readyButton.label = "Ready";
 }
 

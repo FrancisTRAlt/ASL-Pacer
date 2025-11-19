@@ -92,6 +92,8 @@ function handleMQTTMessage(topic, message) {
     } else if (topic.endsWith("/ping")) {
       const { playerId, timestamp } = data;
       if (players[playerId]) players[playerId].lastUpdate = timestamp;
+    } else if (topic.endsWith("/start")) {
+      restartGame(); // All clients switch to countdown when start signal is received
     }
   } catch (err) {
     console.error("Invalid MQTT message:", err);
@@ -172,8 +174,9 @@ function setReady() {
     timestamp: Date.now()
   }));
   publishPlayers();
-  if (Object.values(players).every(p => p.ready) && (currentState === "room" || currentState === "gameover")) {
-    restartGame();
+  if (Object.values(players).every(p => p.ready)) {
+    // Publish a start signal so all clients begin countdown together
+    client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
   }
 }
 

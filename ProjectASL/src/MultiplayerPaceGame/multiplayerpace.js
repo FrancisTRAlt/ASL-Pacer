@@ -269,22 +269,21 @@ function leaveRoom() {
     delete players[playerId];
     publishPlayers();
   }
+  roomId = null; // Reset before UI draw
   currentState = "menu";
   players = {};
-  roomId = null;
   roomInput.hide();
 
-  // Hide only room/game-specific buttons
+  // Hide room-specific buttons
   if (readyButton) readyButton.visible = false;
   if (leaveButton) leaveButton.visible = false;
   if (mainMenuButton) mainMenuButton.visible = false;
 
-  // Reset references for room/game buttons
   readyButton = null;
   leaveButton = null;
   mainMenuButton = null;
 
-  // Keep global buttons (like Main Menu) visible
+  // Ensure Main Menu button is visible
   buttons.forEach(btn => {
     if (btn.label === "Main Menu") btn.visible = true;
   });
@@ -493,11 +492,25 @@ function endGame() {
 function restartGame() {
   currentState = "countdown";
   countdownStartTime = millis();
+  
+  // Reset local score
   playerScore = 0;
-  Object.values(players).forEach(p => { p.ready = false; p.score = 0; });
+
+  // Reset all players' scores and readiness
+  Object.values(players).forEach(p => {
+    p.ready = false;
+    p.score = 0;
+  });
+
+  // Publish updated player data
   publishPlayers();
+
+  // Reset word and progress
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
+  classification = ""; // Clear leftover classification
+
+  // Reset button state
   readyButton = null;
 }
 

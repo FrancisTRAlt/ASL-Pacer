@@ -144,13 +144,24 @@ function sendHeartbeat() {
 function cleanInactivePlayers() {
   const now = Date.now();
   let removed = false;
+
   for (let id in players) {
     if (now - players[id].lastUpdate > PLAYER_TIMEOUT) {
       delete players[id];
       removed = true;
     }
   }
-  if (removed) publishPlayers();
+
+  if (removed) {
+    const activePlayers = Object.keys(players);
+    if (activePlayers.length === 0 && client && roomId) {
+      // Clear retained MQTT message if no players remain
+      client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
+      console.log(`Room ${roomId} cleared from MQTT due to inactivity`);
+    } else {
+      publishPlayers(); // Update MQTT with remaining players
+    }
+  }
 }
 
 
@@ -240,10 +251,13 @@ function setReady() {
     ready: players[playerId].ready,
     timestamp: Date.now()
   }));
-
   publishPlayers();
 
-  if (Object.values(players).every(p => p.ready)) {
+  // NEW LOGIC: If only one active player remains and they are ready, start immediately
+  const activePlayers = Object.values(players).filter(p => !p.left);
+  if (activePlayers.length === 1 && activePlayers[0].ready) {
+    restartGame(); // Start without MQTT
+  } else if (Object.values(players).every(p => p.ready)) {
     client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
   }
 }
@@ -301,77 +315,47 @@ function drawMenu() {
   // Ensure Join Room button exists
 
   // Join Room button
-  
-// Join Room button
-if (!buttons.find(b => b.label === "Join Room")) {
-  buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
-    const customCode = roomInput.value().trim();
-    if (!customCode) {
-      errorMessage = "Please enter a Room ID!";
-      errorTimer = millis();
-      return;
-    } else {
-      joinRoom(customCode); // Join existing room only
-    }
-  }));
-}
 
-// Create Room button
-if (!buttons.find(b => b.label === "Create Room")) {
-  buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
-    createRoom(); // New function
-  }));
-}
+  // Join Room button
+  if (!buttons.find(b => b.label === "Join Room")) {
+    buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
+      const customCode = roomInput.value().trim();
+      if (!customCode) {
+        errorMessage = "Please enter a Room ID!";
+        errorTimer = millis();
+        return;
+      } else {
+        joinRoom(customCode); // Join existing room only
+      }
+    }));
+  }
+
+  // Create Room button
+  if (!buttons.find(b => b.label === "Create Room")) {
+    buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
+      createRoom(); // New function
+    }));
+  }
 
   buttons.forEach(btn => btn.show());
 }
 
 
-// ---------------- ROOM ----------------
-
-function drawRoom() {
-  textAlign(CENTER, TOP);
-  textSize(32);
-  fill(255);
-  text(`Room: ${roomId}`, width / 2, 50);
-
-  let y = 150;
-  Object.values(players).forEach(p => {
-    fill(p.ready ? "green" : "white");
-    text(`${p.name} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
-    y += 40;
-  });
-
-  if (!readyButton) {
-    readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
-  }
-  if (players[playerId]) readyButton.label = players[playerId].ready ? "Unready" : "Ready";
-  readyButton.visible = true;
-  readyButton.show();
-
-  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
-  if (!buttons.find(b => b.label === "Leave")) {
-    buttons.push(leaveButton);
-  }
-  leaveButton.show();
-}
-
-
-
-
 function leaveRoom() {
   console.log("Leaving room...");
-
-  // Remove player from room
+  // Mark player as left instead of removing immediately
   if (playerId && players[playerId]) {
-    delete players[playerId];
+    players[playerId].left = true; // NEW FLAG
   }
 
-  // Clear retained message if no players left
-  if (Object.keys(players).length === 0 && client && roomId) {
+  // Check if this was the last active player
+  const activePlayers = Object.values(players).filter(p => !p.left);
+  if (activePlayers.length === 0 && client && roomId) {
+    // Clear retained MQTT message for this room
     client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
+    console.log(`Room ${roomId} cleared from MQTT`);
   } else {
-    publishPlayers();
+    publishPlayers(); // Update MQTT so others see the change
   }
 
   // Unsubscribe from MQTT topics
@@ -380,18 +364,16 @@ function leaveRoom() {
     console.log(`Unsubscribed from game/rooms/${roomId}/#`);
   }
 
-  // Reset state
+  // Reset local state for this client
   currentState = "menu";
-  players = {};
   roomId = null;
   playerId = null;
-
   roomInput.hide();
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
   readyButton = null;
 
-  // Recreate Join/Create buttons
+  // Recreate Join/Create buttons for menu
   if (!buttons.find(b => b.label === "Join Room")) {
     buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
       const customCode = roomInput.value().trim();
@@ -415,6 +397,7 @@ function leaveRoom() {
 
 
 // ---------------- COUNTDOWN ----------------
+
 function drawCountdown() {
   let elapsed = millis() - countdownStartTime;
   let remaining = 3 - floor(elapsed / 1000);
@@ -429,14 +412,54 @@ function drawCountdown() {
   }
 }
 
+function drawRoom() {
+  textAlign(CENTER, TOP);
+  textSize(32);
+  fill(255);
+  text(`Room: ${roomId}`, width / 2, 50);
+
+  let y = 150;
+  const activePlayers = Object.values(players).filter(p => !p.left); // NEW FILTER
+  if (activePlayers.length === 0) {
+    textSize(24);
+    fill(255, 0, 0);
+    text("Waiting for players...", width / 2, height / 2);
+  } else {
+    activePlayers.forEach(p => {
+      fill(p.ready ? "green" : "white");
+      text(`${p.name} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
+      y += 40;
+    });
+  }
+
+  // Ready button logic
+  if (!readyButton) {
+    readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
+  }
+  if (players[playerId]) {
+    readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+  }
+  readyButton.visible = true;
+  readyButton.show();
+
+  // Leave button logic
+  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+  if (!buttons.find(b => b.label === "Leave")) {
+    buttons.push(leaveButton);
+  }
+  leaveButton.show();
+}
+
 function drawPlayerCount() {
   if (roomId) {
     textAlign(RIGHT, TOP);
     textSize(24);
     fill(255);
-    text(`Players: ${Object.keys(players).length}`, width - 20, 20);
+    const activePlayers = Object.values(players).filter(p => !p.left);
+    text(`Players: ${activePlayers.length}`, width - 20, 20);
   }
 }
+
 
 // ---------------- GAME ----------------
 function drawGame() {
@@ -491,39 +514,39 @@ function drawGame() {
 
 // ---------------- GAME OVER ----------------
 function drawGameOver() {
-  textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(64);
-  text("Game Over!", width / 2, 80);
+    textAlign(CENTER, CENTER);
+    fill(255);
+    textSize(64);
+    text("Game Over!", width / 2, 80);
+    textSize(32);
+    text("Players & Scores:", width / 2, 150);
 
-  textSize(32);
-  text("Players & Scores:", width / 2, 150);
+    let y = 200;
+    Object.values(players).forEach(p => {
+        if (p.left) {
+            fill("red");
+        } else {
+            fill(p.ready ? "green" : "white");
+        }
+        text(`${p.name} - ${p.score}`, width / 2, y);
+        y += 40;
+    });
 
-  let y = 200;
-  Object.values(players).forEach(p => {
-    // Change color based on ready state
-    fill(p.ready ? "green" : "white");
-    text(`${p.name} - ${p.score}`, width / 2, y);
-    y += 40;
-  });
+    if (!readyButton) {
+        readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
+    }
+    let player = Object.values(players).find(pl => pl.name === playerName);
+    if (player) readyButton.label = player.ready ? "Unready" : "Ready";
+    readyButton.visible = true;
+    readyButton.show();
 
-  if (!readyButton) {
-    readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
-  }
-  let player = Object.values(players).find(pl => pl.name === playerName);
-  if (player) readyButton.label = player.ready ? "Unready" : "Ready";
-  readyButton.visible = true;
-  readyButton.show();
-
-  let mainMenuButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", () => {
-    currentState = "menu";
-    players = {};
-    roomId = null;
-    roomInput.hide();
-    buttons.forEach(btn => btn.visible = true);
-    readyButton = null;
-  });
-  mainMenuButton.show();
+    // FIX: Add leaveButton to global buttons array
+    let leaveButton = buttons.find(b => b.label === "Leave");
+    if (!leaveButton) {
+        leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+        buttons.push(leaveButton);
+    }
+    leaveButton.show();
 }
 
 // ---------------- BUTTON CLASS ----------------
@@ -632,11 +655,19 @@ function restartGame() {
   currentState = "countdown";
   countdownStartTime = millis();
   playerScore = 0;
-  Object.values(players).forEach(p => { p.ready = false; p.score = 0; });
+
+  Object.values(players).forEach(p => {
+    p.ready = false;
+    p.score = 0;
+  });
   publishPlayers();
+
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
-  readyButton = null;
+
+  // Reset UI elements
+  readyButton = null; // Important
+  buttons = buttons.filter(btn => btn.label === "Main Menu"); // Keep only menu button
 }
 
 // ---------------- HAND DATA ----------------

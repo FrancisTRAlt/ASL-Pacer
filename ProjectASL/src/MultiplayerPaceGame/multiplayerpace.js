@@ -43,7 +43,24 @@ function preload() {
 function setup() {
   createCanvas(800, 600);
   roomInput = createInput('');
+  roomInput.attribute('placeholder', 'Enter Code');
   roomInput.hide();
+
+  roomInput.position((width - roomInput.width) / 2, height / 2 - 40);
+
+  // Apply styles (in setup or once)
+  roomInput.style('padding', '10px');
+  roomInput.style('font-size', '18px');
+  roomInput.style('border', '2px solid #ccc');
+  roomInput.style('border-radius', '8px');
+  roomInput.style('outline', 'none');
+  roomInput.style('color', '#333');
+  roomInput.style('background-color', '#f9f9f9');
+  roomInput.style('box-sizing', 'border-box'); // 
+  roomInput.style('width', '250px'); // 
+
+
+
   playerName = "Player" + floor(random(1000, 9999));
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
@@ -90,8 +107,9 @@ function handleMQTTMessage(topic, message) {
       // Merge instead of overwrite
       players = { ...players, ...snapshot };
 
-      if (Object.keys(players).length > 10) {
-        alert("Room is full! Maximum 10 players allowed.");
+      if (Object.keys(players).length > 5) {
+        errorMessage = "Room is full! Maximum 5 players allowed.";
+        errorTimer = millis();
         leaveRoom();
         return;
       }
@@ -151,13 +169,39 @@ async function joinRoom(id) {
 
   client.subscribe(`game/rooms/${roomId}/#`);
 
-  // Wait briefly for snapshot before adding player
+  // Wait briefly for snapshot
   await new Promise(resolve => setTimeout(resolve, 500));
 
+  if (Object.keys(players).length === 0) {
+    errorMessage = "Room does not exist!";
+    errorTimer = millis();
+    currentState = "menu"; // Go back to menu
+    leaveRoom();
+    return;
+  }
+
+  // Add current player
   playerId = addPlayer(playerName);
   publishPlayers();
 }
 
+
+function createRoom() {
+  roomId = "room" + getRandomLetterAndNumber();
+  players = {};
+
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
+
+  currentState = "room";
+  roomInput.hide();
+
+  client.subscribe(`game/rooms/${roomId}/#`);
+
+  // Add current player immediately
+  playerId = addPlayer(playerName);
+  publishPlayers();
+}
 
 
 
@@ -210,7 +254,7 @@ function getRandomLetterAndNumber() {
   for (let i = 0; i < 6; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return "-"+result;
+  return "-" + result;
 }
 
 // ---------------- DRAW ----------------
@@ -230,6 +274,7 @@ function draw() {
 
 function drawMenu() {
   background(30);
+
   if (errorMessage && millis() - errorTimer < 3000) {
     fill(255, 0, 0);
     textSize(20);
@@ -244,30 +289,39 @@ function drawMenu() {
   fill(50, 50, 50, 180);
   rect(width / 2 - 160, height / 2 - 80, 320, 180, 15);
 
+  // Display username above input field
+  textSize(20);
+  fill(200);
+  text(`Your Username: ${playerName}`, width / 2, height / 2 - 55);
+
   roomInput.position(width / 2 - 125, height / 2 - 40);
   roomInput.size(250);
   roomInput.show();
 
-  // ✅ Ensure Join Room button exists
-  if (!buttons.find(b => b.label === "Join Room")) {
-    buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
-      const customCode = roomInput.value().trim();
-      if (!customCode) {
-        errorMessage = "Please enter a Room ID!";
-        errorTimer = millis();
-        return;
-      } else {
-        joinRoom(customCode);
-      }
-    }));
-  }
+  // Ensure Join Room button exists
 
-  // ✅ Ensure Create Room button exists
-  if (!buttons.find(b => b.label === "Create Room")) {
-    buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
-      joinRoom("room" + getRandomLetterAndNumber());
-    }));
-  }
+  // Join Room button
+  
+// Join Room button
+if (!buttons.find(b => b.label === "Join Room")) {
+  buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
+    const customCode = roomInput.value().trim();
+    if (!customCode) {
+      errorMessage = "Please enter a Room ID!";
+      errorTimer = millis();
+      return;
+    } else {
+      joinRoom(customCode); // Join existing room only
+    }
+  }));
+}
+
+// Create Room button
+if (!buttons.find(b => b.label === "Create Room")) {
+  buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
+    createRoom(); // New function
+  }));
+}
 
   buttons.forEach(btn => btn.show());
 }
@@ -308,41 +362,53 @@ function drawRoom() {
 function leaveRoom() {
   console.log("Leaving room...");
 
+  // Remove player from room
   if (playerId && players[playerId]) {
     delete players[playerId];
+  }
+
+  // Clear retained message if no players left
+  if (Object.keys(players).length === 0 && client && roomId) {
+    client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
+  } else {
     publishPlayers();
   }
 
+  // Unsubscribe from MQTT topics
   if (client && roomId) {
     client.unsubscribe(`game/rooms/${roomId}/#`);
     console.log(`Unsubscribed from game/rooms/${roomId}/#`);
   }
 
+  // Reset state
   currentState = "menu";
   players = {};
   roomId = null;
   playerId = null;
 
   roomInput.hide();
-
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
-
   readyButton = null;
 
-  buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
-    const customCode = roomInput.value().trim();
-    if (!customCode) {
-      errorMessage = "Please enter a Room ID!";
-      errorTimer = millis();
-      return;
-    } else {
-      joinRoom(customCode);
-    }
-  }));
-  buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
-    joinRoom("room" + getRandomLetterAndNumber());
-  }));
+  // Recreate Join/Create buttons
+  if (!buttons.find(b => b.label === "Join Room")) {
+    buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
+      const customCode = roomInput.value().trim();
+      if (!customCode) {
+        errorMessage = "Please enter a Room ID!";
+        errorTimer = millis();
+        return;
+      } else {
+        joinRoom(customCode);
+      }
+    }));
+  }
+  if (!buttons.find(b => b.label === "Create Room")) {
+    buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
+      createRoom();
+    }));
+  }
 }
 
 
@@ -429,13 +495,18 @@ function drawGameOver() {
   fill(255);
   textSize(64);
   text("Game Over!", width / 2, 80);
+
   textSize(32);
   text("Players & Scores:", width / 2, 150);
+
   let y = 200;
   Object.values(players).forEach(p => {
+    // Change color based on ready state
+    fill(p.ready ? "green" : "white");
     text(`${p.name} - ${p.score}`, width / 2, y);
     y += 40;
   });
+
   if (!readyButton) {
     readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
   }
@@ -443,6 +514,7 @@ function drawGameOver() {
   if (player) readyButton.label = player.ready ? "Unready" : "Ready";
   readyButton.visible = true;
   readyButton.show();
+
   let mainMenuButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", () => {
     currentState = "menu";
     players = {};
@@ -452,9 +524,6 @@ function drawGameOver() {
     readyButton = null;
   });
   mainMenuButton.show();
-  if (mouseIsPressed) {
-    mainMenuButton.click();
-  }
 }
 
 // ---------------- BUTTON CLASS ----------------

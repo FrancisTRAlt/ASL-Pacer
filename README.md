@@ -7,6 +7,8 @@ A Machine Learning game that captures ASL.
 * This is built using Tauri. See their official documentation to install Tauri: https://v2.tauri.app/start/prerequisites/
 * p5.js: https://p5js.org/download/
 * ml5.js: https://docs.ml5js.org/#/
+* Supabase: https://supabase.com/docs
+* Arduino: https://www.arduino.cc/
 
 ### Installation
 

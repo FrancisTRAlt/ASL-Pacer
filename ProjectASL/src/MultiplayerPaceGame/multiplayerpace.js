@@ -87,38 +87,49 @@ function setupMQTT() {
 
 
 
+
 function handleMQTTMessage(topic, message) {
   try {
     const data = JSON.parse(message.toString());
+
     if (topic.endsWith("/players/update")) {
-      const { playerId, name, score, ready, timestamp } = data;
+      const { playerId, name, score, ready, left, timestamp } = data;
       if (!playerId || !name) return;
-      players[playerId] = { name, score, ready, lastUpdate: timestamp };
+      players[playerId] = { name, score, ready, left: !!left, lastUpdate: timestamp };
+
     } else if (topic.endsWith("/players")) {
       const snapshot = JSON.parse(message.toString());
-      players = { ...players, ...snapshot };
-      if (Object.keys(players).length > 5) {
-        errorMessage = "Room is full! Maximum 5 players allowed.";
-        errorTimer = millis();
-        leaveRoom();
-        return;
+      const cleanSnapshot = {};
+      for (let id in snapshot) {
+        const p = snapshot[id];
+        if (p && p.name) {
+          cleanSnapshot[id] = {
+            name: p.name,
+            score: p.score || 0,
+            ready: !!p.ready,
+            left: !!p.left,
+            lastUpdate: p.lastUpdate || Date.now()
+          };
+        }
       }
+      players = cleanSnapshot; // Replace instead of merge
+      redraw(); // Force UI refresh
+
     } else if (topic.endsWith("/start")) {
-      restartGame();
+      restartGame(); // All clients restart together
+
     } else if (topic.endsWith("/ping")) {
       const { playerId, timestamp } = data;
       if (players[playerId]) players[playerId].lastUpdate = timestamp;
+
     } else if (topic.endsWith("/state")) {
       const { state } = data;
-      gameState = state; // Track globally
+      gameState = state;
     }
   } catch (err) {
     console.error("Invalid MQTT message:", err);
   }
 }
-
-
-
 
 
 
@@ -134,22 +145,24 @@ function sendHeartbeat() {
 
 
 
+
+
 function cleanInactivePlayers() {
   const now = Date.now();
   let removed = false;
+
   for (let id in players) {
-    if (now - players[id].lastUpdate > PLAYER_TIMEOUT && currentState === "room") { // Avoid removing during game
+    if (now - players[id].lastUpdate > PLAYER_TIMEOUT) {
       delete players[id];
       removed = true;
     }
   }
+
   if (removed) {
-    const activePlayers = Object.keys(players);
-    if (activePlayers.length === 0 && client && roomId) {
+    publishPlayers(); // Always publish clean snapshot
+    if (Object.keys(players).length === 0 && client && roomId) {
       client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
       console.log(`Room ${roomId} cleared from MQTT due to inactivity`);
-    } else {
-      publishPlayers();
     }
   }
 }
@@ -158,8 +171,11 @@ function cleanInactivePlayers() {
 
 
 
+
 async function joinRoom(id) {
   if (!id) return;
+
+
   players = {};
   roomId = id;
   buttons = buttons.filter(btn => btn.label === "Main Menu");
@@ -171,8 +187,8 @@ async function joinRoom(id) {
 
   await new Promise(resolve => setTimeout(resolve, 500));
 
-  if (gameState === "in-progress") { // Block joining if game active
-    errorMessage = "Game is already in progress!";
+  if (gameState !== "waiting") { // Block joining if not in lobby
+    errorMessage = "Game is in progress";
     errorTimer = millis();
     currentState = "menu";
     leaveRoom();
@@ -227,10 +243,21 @@ function addPlayer(name) {
 
 
 
-
-
 function publishPlayers() {
-  client.publish(`game/rooms/${roomId}/players`, JSON.stringify(players), { retain: true });
+  const cleanPlayers = {};
+  for (let id in players) {
+    const p = players[id];
+    if (p && p.name) {
+      cleanPlayers[id] = {
+        name: p.name,
+        score: p.score || 0,
+        ready: !!p.ready,
+        left: !!p.left,
+        lastUpdate: p.lastUpdate || Date.now()
+      };
+    }
+  }
+  client.publish(`game/rooms/${roomId}/players`, JSON.stringify(cleanPlayers), { retain: true });
 }
 
 
@@ -239,23 +266,30 @@ function publishPlayers() {
 
 function setReady() {
   if (!playerId || !players[playerId]) return;
+
   players[playerId].ready = !players[playerId].ready;
   readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+
   client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
     playerId,
     name: players[playerId].name,
     score: players[playerId].score,
     ready: players[playerId].ready,
+    left: !!players[playerId].left,
     timestamp: Date.now()
   }));
   publishPlayers();
+
   const activePlayers = Object.values(players).filter(p => !p.left);
-  if (activePlayers.length === 1 && activePlayers[0].ready) {
-    restartGame();
-  } else if (Object.values(players).every(p => p.ready)) {
-    client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
+
+  if (gameState === "waiting" || gameState === "gameover") {
+    if (activePlayers.length > 0 && activePlayers.every(p => p.ready)) {
+      client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
+    }
   }
 }
+
+
 
 
 function getRandomLetterAndNumber() {
@@ -326,7 +360,7 @@ function drawMenu() {
   // Create Room button
   if (!buttons.find(b => b.label === "Create Room")) {
     buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
-      createRoom(); 
+      createRoom();
     }));
   }
 
@@ -334,30 +368,33 @@ function drawMenu() {
 }
 
 
+
+
+
+
 function leaveRoom() {
   console.log("Leaving room...");
-  // Mark player as left instead of removing immediately
+
   if (playerId && players[playerId]) {
-    players[playerId].left = true; 
+    if (currentState === "gameover") {
+      players[playerId].left = true; // Mark disconnected
+      publishPlayers();
+    } else {
+      delete players[playerId];
+      publishPlayers();
+    }
   }
 
-  // Check if this was the last active player
   const activePlayers = Object.values(players).filter(p => !p.left);
   if (activePlayers.length === 0 && client && roomId) {
-    // Clear retained MQTT message for this room
     client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
     console.log(`Room ${roomId} cleared from MQTT`);
-  } else {
-    publishPlayers(); // Update MQTT so others see the change
   }
 
-  // Unsubscribe from MQTT topics
   if (client && roomId) {
     client.unsubscribe(`game/rooms/${roomId}/#`);
-    console.log(`Unsubscribed from game/rooms/${roomId}/#`);
   }
 
-  // Reset local state for this client
   currentState = "menu";
   roomId = null;
   playerId = null;
@@ -366,25 +403,10 @@ function leaveRoom() {
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
   readyButton = null;
 
-  // Recreate Join/Create buttons for menu
-  if (!buttons.find(b => b.label === "Join Room")) {
-    buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
-      const customCode = roomInput.value().trim();
-      if (!customCode) {
-        errorMessage = "Please enter a Room ID!";
-        errorTimer = millis();
-        return;
-      } else {
-        joinRoom(customCode);
-      }
-    }));
-  }
-  if (!buttons.find(b => b.label === "Create Room")) {
-    buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
-      createRoom();
-    }));
-  }
+  redraw(); // Immediate UI refresh
 }
+
+
 
 
 
@@ -405,14 +427,18 @@ function drawCountdown() {
   }
 }
 
+
+
+
 function drawRoom() {
   textAlign(CENTER, TOP);
   textSize(32);
   fill(255);
-  text(`Room: ${roomId}`, width / 2, 50);
+  text(`Code: ${roomId}`, width / 2, 50);
 
   let y = 150;
-  const activePlayers = Object.values(players).filter(p => !p.left); // NEW FILTER
+  const activePlayers = Object.values(players); // Immediate local state
+
   if (activePlayers.length === 0) {
     textSize(24);
     fill(255, 0, 0);
@@ -423,33 +449,32 @@ function drawRoom() {
       text(`${p.name} ${p.ready ? "(Ready)" : ""}`, width / 2, y);
       y += 40;
     });
-  }
 
-  // Ready button logic
-  if (!readyButton) {
-    readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
-  }
-  if (players[playerId]) {
-    readyButton.label = players[playerId].ready ? "Unready" : "Ready";
-  }
-  readyButton.visible = true;
-  readyButton.show();
+    if (!readyButton) {
+      readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
+    }
+    if (players[playerId]) {
+      readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+    }
+    readyButton.visible = true;
+    readyButton.show();
 
-  // Leave button logic
-  let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
-  if (!buttons.find(b => b.label === "Leave")) {
-    buttons.push(leaveButton);
+    let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
+    if (!buttons.find(b => b.label === "Leave")) {
+      buttons.push(leaveButton);
+    }
+    leaveButton.show();
   }
-  leaveButton.show();
 }
+
+
 
 function drawPlayerCount() {
   if (roomId) {
     textAlign(RIGHT, TOP);
     textSize(24);
     fill(255);
-    const activePlayers = Object.values(players).filter(p => !p.left);
-    text(`Players: ${activePlayers.length}`, width - 20, 20);
+    text(`Players: ${Object.keys(players).length} / 5`, width - 20, 20);
   }
 }
 
@@ -506,6 +531,9 @@ function drawGame() {
 }
 
 // ---------------- GAME OVER ----------------
+
+
+
 function drawGameOver() {
   textAlign(CENTER, CENTER);
   fill(255);
@@ -518,10 +546,11 @@ function drawGameOver() {
   Object.values(players).forEach(p => {
     if (p.left) {
       fill("red");
+      text(`${p.name} (Disconnected) - ${p.score}`, width / 2, y);
     } else {
       fill(p.ready ? "green" : "white");
+      text(`${p.name} - ${p.score}`, width / 2, y);
     }
-    text(`${p.name} - ${p.score}`, width / 2, y);
     y += 40;
   });
 
@@ -540,6 +569,7 @@ function drawGameOver() {
   }
   leaveButton.show();
 }
+
 
 // ---------------- BUTTON CLASS ----------------
 class Button {
@@ -634,14 +664,24 @@ function startCountdown() {
 
 
 
+
 function endGame() {
   currentState = "gameover";
+
+  // Reset readiness for all players
   Object.values(players).forEach(p => p.ready = false);
   publishPlayers();
-  client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "waiting" }), { retain: true });
-  gameState = "waiting"; 
+
+  // Update MQTT state to "gameover" instead of "waiting"
+  client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "gameover" }), { retain: true });
+  gameState = "gameover";
+
+  // Reset Ready button label
   if (readyButton) readyButton.label = "Ready";
 }
+
+
+
 
 
 
@@ -650,16 +690,32 @@ function endGame() {
 function restartGame() {
   currentState = "countdown";
   countdownStartTime = millis();
+
+  // Remove disconnected players
+  for (let id in players) {
+    if (players[id].left) {
+      delete players[id];
+    }
+  }
+
   playerScore = 0;
-  Object.values(players).forEach(p => { p.ready = false; p.score = 0; });
+
+  Object.values(players).forEach(p => {
+    p.ready = false;
+    p.score = 0;
+  });
   publishPlayers();
+
   client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "in-progress" }), { retain: true });
   gameState = "in-progress";
+
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
+
   readyButton = null;
   buttons = buttons.filter(btn => btn.label === "Main Menu");
 }
+
 
 
 // ---------------- HAND DATA ----------------

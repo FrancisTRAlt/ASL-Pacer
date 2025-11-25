@@ -110,12 +110,19 @@ function draw() {
   }
 
   if (currentPage !== "cameraCheck") {
-    background(backgroundColor); // Replaces video background
+    drawSpaceBackground();
+    // Replaces video background
     drawTitle();
     if (hands.length > 0) {
       drawHandSkeleton(hands[0], fingers);
       userIsOnline();
       drawButtons();
+    }else {
+      textAlign(CENTER, CENTER);
+      textSize(36);
+      fill(255);
+      text("No Hand Detected", width / 2, height / 2);
+      text("Raise your Hand to Use the Menu", width / 2, height / 2 + 50);
     }
   }
 
@@ -156,9 +163,35 @@ function draw() {
   }
 }
 
+
+function drawSpaceBackground() {
+  background(0); // Black space
+  noStroke();
+  // Create stars once and store them in a static variable
+  if (!drawSpaceBackground.stars) {
+    drawSpaceBackground.stars = [];
+    const numStars = 200;
+    for (let i = 0; i < numStars; i++) {
+      drawSpaceBackground.stars.push({
+        x: random(width),
+        y: random(height),
+        size: random(1, 3),
+        phase: random(TWO_PI)
+      });
+    }
+  }
+
+  // Draw stars with smooth twinkle
+  for (let s of drawSpaceBackground.stars) {
+    let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
+    fill(255, alpha);
+    ellipse(s.x, s.y, s.size, s.size);
+  }
+}
+
 // ---------------- LOADING SCREEN ----------------
 function drawLoadingScreen() {
-  background(backgroundColor);
+  drawSpaceBackground();
   textAlign(CENTER, CENTER);
   textSize(36);
   fill(255);
@@ -245,8 +278,8 @@ function showCredits() {
 function showGameOptions() {
   currentPage = "gameOptions";
   buttons = [
-    createButtonObj("Single Player", width / 2 - 220, height / 2 - 100, 200, 80, () => { showSinglePlayerInstruc(); }),
-    createButtonObj("Multiplayer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiASLInstruc(); }),
+    createButtonObj("ASL Survival", width / 2 - 220, height / 2 - 100, 200, 80, () => { showSinglePlayerInstruc(); }),
+    createButtonObj("ASL Pacer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiASLInstruc(); }),
     createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => { currentPage = "menu"; setupMenuButtons(); })
   ];
 }
@@ -280,7 +313,7 @@ function drawSinglePlayerInstructions() {
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(28);
-  text("\nYou have 60 seconds to spell as many words\n as you can in ASL.\n\nMake sure you are in a\ngood distance from the camera.", width / 2, height / 2 - 100);
+  text("\nTBD", width / 2, height / 2 - 100);
   drawButtons();
 }
 
@@ -308,7 +341,7 @@ function drawMultiASLInstructions() {
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(28);
-  text("\nYou have 60 seconds to spell as many words\n as you can in ASL.\n\nMake sure you are in a\ngood distance from the camera.\nHave fun racing!", width / 2, height / 2 - 100);
+  text("\nYou have 60 seconds to spell as many words\n as you can in ASL.\n\n You can play by yourself or with friends.", width / 2, height / 2 - 100);
   drawButtons();
 }
 
@@ -378,28 +411,51 @@ function userIsOnline() {
 
 // ---------------- HAND INTERACTION ----------------
 function handleHandInteraction(sx, sy, sw, sh) {
+  // Get the first detected hand
   const hand = hands[0];
+
+  // Extract key fingertip positions
   const index = hand.index_finger_tip;
   const thumb = hand.thumb_tip;
+
+  // Clamp helper to keep values within canvas bounds
   const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+
+  // Map original hand coordinates to canvas coordinates
   const mapX = origX => clamp(((origX - sx) / sw) * width, 0, width);
   const mapY = origY => clamp(((origY - sy) / sh) * height, 0, height);
+
+  // Convert fingertip positions to canvas space
   const indexX = mapX(index.x), indexY = mapY(index.y);
   const thumbX = mapX(thumb.x), thumbY = mapY(thumb.y);
+
+  // Calculate distance between index and thumb (pinch detection)
   const d = dist(indexX, indexY, thumbX, thumbY);
+
+  // Cursor position is midpoint between thumb and index
   const x = (indexX + thumbX) / 2, y = (indexY + thumbY) / 2;
+
+  // Define pinch threshold based on canvas width
   const pinchThreshold = width * 0.036;
   const isPinching = d < pinchThreshold;
+
+  // Check if cursor is hovering over any button
   let isHoveringButton = false;
   buttons.forEach(btn => {
     if (!btn.hidden && x > btn.x && x < btn.x + btn.w && y > btn.y && y < btn.y + btn.h) {
       isHoveringButton = true;
     }
   });
+
+  // Animate cursor properties based on pinch state
   cursorRotation = lerp(cursorRotation, isPinching ? 15 : 0, 0.1);
   cursorScale = lerp(cursorScale, isPinching ? 1.5 : 1.2, 0.1);
   bounceOffset = isPinching ? sin(frameCount * 0.3) * 4 : 0;
-  let cursorColor = isPinching ? color(135, 206, 235) : isHoveringButton ? color(255) : color(0);
+
+  // Cursor color changes based on interaction state
+  let cursorColor = isPinching ? color('cyan') : isHoveringButton ? color(0) : color(255);
+
+  // Draw custom cursor at calculated position
   push();
   translate(x, y + bounceOffset);
   rotate(radians(cursorRotation));
@@ -407,8 +463,10 @@ function handleHandInteraction(sx, sy, sw, sh) {
   noStroke();
   fill(cursorColor);
   rectMode(CENTER);
-  rect(0, 0, 32, 32, 6);
+  circle(0, 0, 25);
   pop();
+
+  // Highlight button and trigger action if pinched
   buttons.forEach(btn => {
     if (!btn.hidden && x > btn.x && x < btn.x + btn.w && y > btn.y && y < btn.y + btn.h) {
       highlightButton(btn);
@@ -418,6 +476,8 @@ function handleHandInteraction(sx, sy, sw, sh) {
       }
     }
   });
+
+  // Update pinch state for next frame
   lastPinch = isPinching;
 }
 

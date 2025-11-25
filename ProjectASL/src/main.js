@@ -14,9 +14,21 @@ let bounceOffset = 0;
 // Loading screen state
 let isLoading = true;
 let progress = 0;
+let targetProgress = 0;
 // Fade transition state
 let isFading = false;
 let fadeAlpha = 0;
+
+const backgroundColor = "#0066dbff";
+
+const fingers = {
+  thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
+  index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
+  middle: ["middle_finger_mcp", "middle_finger_pip", "middle_finger_dip", "middle_finger_tip"],
+  ring: ["ring_finger_mcp", "ring_finger_pip", "ring_finger_dip", "ring_finger_tip"],
+  pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
+};
+
 
 // Dummy leaderboard data
 let aslLeaderboardData = [
@@ -33,122 +45,106 @@ let aslLeaderboardData = [
   { name: "PlayerEleven", score: 30 }
 ];
 
-let arduinoLeaderboardData = [
-  { name: "MakerMax", score: 150 },
-  { name: "CodeGuru", score: 110 },
-  { name: "TechieTom", score: 90 },
-  { name: "CircuitQueen", score: 85 },
-  { name: "ByteBoss", score: 75 },
-  { name: "HackHero", score: 70 },
-  { name: "WireWizard", score: 65 },
-  { name: "ChipChamp", score: 60 },
-  { name: "BoardBoss", score: 55 },
-  { name: "ElectroAce", score: 50 },
-  { name: "VoltViking", score: 45 }
-];
-
 // Sort function
 function sortLeaderboard(data) {
   return data.sort((a, b) => b.score - a.score);
 }
 
-// ---------------- PRELOAD ----------------
-function preload() {
-  handPose = ml5.handPose({ flipped: true });
-}
-
 // ---------------- SETUP ----------------
+
 async function setup() {
   createCanvas(800, 600);
-  const cameraAvailable = await checkCameraAccess();
-  if (!cameraAvailable) {
-    background(0);
-    textAlign(CENTER, CENTER);
-    textSize(28);
-    fill("SkyBlue");
-    text("This game requires a camera. Please enable.", width / 2, height / 2);
-    retryButton = createButton("Retry");
-    retryButton.position(width / 2 - 75, height / 2 + 40);
-    retryButton.size(150, 50);
-    retryButton.mousePressed(async () => {
-      const retry = await checkCameraAccess();
-      if (retry) {
-        retryButton.remove();
-        window.reload();
-      }
-    });
-    noLoop();
-    return;
-  }
-  noCursor();
-  currentPage = "menu";
 
+  // Start loading
+  isLoading = true;
+  progress = 0;
+  targetProgress = 0;
+  currentPage = "loading";
+
+  // Create video
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
 
-  handPose.detectStart(video, results => {
-    hands = results;
-    if (isLoading && hands.length > 0) {
-      isLoading = false;
-    }
+  // Wait for video metadata
+  await new Promise(resolve => {
+    video.elt.onloadedmetadata = () => {
+      targetProgress = 50; // Animate toward 50%
+      resolve();
+    };
   });
 
-  setupMenuButtons();
+  // Initialize handPose and wait for model load
+  await new Promise(resolve => {
+    handPose = ml5.handPose({ flipped: true }, () => {
+      targetProgress = 100; // Animate toward 100%
+      resolve();
+    });
+  });
 
-  let progressInterval = setInterval(() => {
-    if (progress < 100) progress += 2;
-    if (progress >= 100) {
-      progress = 100;
-      clearInterval(progressInterval);
-      isLoading = false;
-    }
-  }, 50);
+  // Start detection
+  handPose.detectStart(video, results => {
+    hands = results;
+  });
+
+  // After loading finishes, switch to menu
+  currentPage = "menu";
+  setupMenuButtons();
+  noCursor();
 }
+
 
 // ---------------- DRAW ----------------
 function draw() {
   if (isLoading && currentPage !== "cameraCheck") {
+    // Smooth progress animation
+    progress = lerp(progress, targetProgress, 0.05);
+    // Show loading screen
     drawLoadingScreen();
-    return;
+    // When progress reaches ~100, finish loading
+    if (progress >= 99) {
+      progress = 100;
+      isLoading = false;
+    }
+    return; // Stop here until loading is done
   }
+
   if (currentPage !== "cameraCheck") {
-    drawPixelatedVideo();
+    background(backgroundColor); // Replaces video background
     drawTitle();
-    userIsOnline();
-    drawButtons();
+    if (hands.length > 0) {
+      drawHandSkeleton(hands[0], fingers);
+      userIsOnline();
+      drawButtons();
+    }
   }
 
-  if (currentPage === "singlePlayerInstruc") {
-    drawSinglePlayerInstructions();
-  }else if (currentPage === "multiplayerOptions"){
-    showMultiplayerOptions();
-  }else if (currentPage === "MultiASLInstruc"){
-    drawMultiASLInstructions();
-  }else if (currentPage === "MultiArduinoInstruc"){
-    drawMultiArduinoInstructions();
-  }else if (currentPage === "aslLeaderboard") {
-    drawASLLeaderboard();
-  } else if (currentPage === "arduinoLeaderboard") {
-    drawArduinoLeaderboard();
-  }else if (currentPage === "credits") {
-    fill(0);
-    rect(width / 4, height / 4 - 50, width / 2, 170, 20); // Rounded c
-    
-    // Title
-    textSize(48);
-    fill("SkyBlue");
-    text("Credits", width / 2, height / 4);
+  if (hands.length > 0) {
+    if (currentPage === "singlePlayerInstruc") {
+      drawSinglePlayerInstructions();
+    } else if (currentPage === "MultiASLInstruc") {
+      drawMultiASLInstructions();
+    } else if (currentPage === "aslLeaderboard") {
+      drawASLLeaderboard();
+    } else if (currentPage === "credits") {
+      fill(0);
+      rect(width / 4, height / 4 - 50, width / 2, 170, 20); // Rounded c
 
-    // Credits List
-    textSize(28);
-    fill("SkyBlue");
-    text("Developed by: Francis Tran", width / 2, height / 2 - 80);
+      // Title
+      textSize(48);
+      fill("SkyBlue");
+      text("Credits", width / 2, height / 4);
 
-    // Footer
-    textSize(20);
-    fill(180);
-    text("© 2025 ASL Pacer Project", width / 2, height - 70);
+      // Credits List
+      textSize(28);
+      fill("SkyBlue");
+      text("Developed by: Francis Tran", width / 2, height / 2 - 80);
+
+      // Footer
+      textSize(20);
+      fill(180);
+      text("© 2025 ASL Pacer Project", width / 2, height - 70);
+    }
   }
 
   if (hands.length > 0) handleHandInteraction(0, 0, video.width, video.height);
@@ -162,7 +158,7 @@ function draw() {
 
 // ---------------- LOADING SCREEN ----------------
 function drawLoadingScreen() {
-  background(30);
+  background(backgroundColor);
   textAlign(CENTER, CENTER);
   textSize(36);
   fill(255);
@@ -177,7 +173,7 @@ function drawLoadingScreen() {
   rect(barX, barY, fillWidth, barHeight, 10);
   fill(255);
   textSize(20);
-  text(`${progress}%`, width / 2, barY + barHeight + 25);
+  text(`${progress.toFixed(1)}%`, width / 2, barY + barHeight + 25);
 }
 
 // ---------------- TITLE ----------------
@@ -205,25 +201,6 @@ function drawTitle() {
   pop();
 }
 
-// ---------------- PIXELATION EFFECT ----------------
-function drawPixelatedVideo() {
-  const pixelSize = 20;
-  video.loadPixels();
-  for (let y = 0; y < video.height; y += pixelSize) {
-    for (let x = 0; x < video.width; x += pixelSize) {
-      const i = (y * video.width + x) * 4;
-      const r = video.pixels[i], g = video.pixels[i + 1], b = video.pixels[i + 2];
-      fill(r, g, b);
-      noStroke();
-      rect(
-        map(x, 0, video.width, 0, width),
-        map(y, 0, video.height, 0, height),
-        map(pixelSize, 0, video.width, 0, width),
-        map(pixelSize, 0, video.height, 0, height)
-      );
-    }
-  }
-}
 
 // ---------------- BUTTONS ----------------
 function drawButtons() {
@@ -269,7 +246,7 @@ function showGameOptions() {
   currentPage = "gameOptions";
   buttons = [
     createButtonObj("Single Player", width / 2 - 220, height / 2 - 100, 200, 80, () => { showSinglePlayerInstruc(); }),
-    createButtonObj("Multiplayer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiplayerOptions(); }),
+    createButtonObj("Multiplayer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiASLInstruc(); }),
     createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => { currentPage = "menu"; setupMenuButtons(); })
   ];
 }
@@ -289,6 +266,10 @@ function showSinglePlayerInstruc() {
     createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {
       currentPage = "gameOptions";
       showGameOptions();
+    }),
+    createButtonObj("Leaderboard", width / 2 - 100, height / 2 + 175, 200, 80, () => {
+      currentPage = "aslLeaderboard";
+      showASLLeaderboard();
     })
   ];
 }
@@ -303,22 +284,6 @@ function drawSinglePlayerInstructions() {
   drawButtons();
 }
 
-// ---------------- MULTIPLAYER MENU ----------------
-function showMultiplayerOptions() {
-  currentPage = "multiplayerOptions";
-  const leftX = width / 2 - 250;
-  const rightX = width / 2 + 50;
-  const topY = height / 2 - 120;
-  const bottomY = height / 2 + 20;
-
-  buttons = [
-    createButtonObj("ASL Marathon", leftX, topY, 200, 100, () => { showMultiASLInstruc(); }),
-    createButtonObj("Arduino Coder", rightX, topY, 200, 100, () => { showMultiArduinoInstruc(); }),
-    createButtonObj("Leaderboard", leftX, bottomY, 200, 70, () => { showASLLeaderboard(); }),
-    createButtonObj("Leaderboard", rightX, bottomY, 200, 70, () => { showArduinoLeaderboard(); }),
-    createButtonObj("Back", width / 2 - 100, height - 170, 200, 60, () => { currentPage = "gameOptions"; showGameOptions(); })
-  ];
-}
 // ---------------- MULTIPLAYER ASL Marathon MENU ----------------
 function showMultiASLInstruc() {
   currentPage = "MultiASLInstruc";
@@ -331,11 +296,12 @@ function showMultiASLInstruc() {
       }, 800);
     }),
     createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {
-      currentPage = "multiplayerOptions";
-      showMultiplayerOptions();
+      currentPage = "gameOptions";
+      showGameOptions();
     })
   ];
 }
+
 function drawMultiASLInstructions() {
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20);
@@ -346,45 +312,12 @@ function drawMultiASLInstructions() {
   drawButtons();
 }
 
-// ---------------- MULTIPLAYER Arduino MENU ----------------
-function showMultiArduinoInstruc() {
-  currentPage = "MultiArduinoInstruc";
-  buttons = [
-    createButtonObj("Play", width / 2 - 220, height / 2 + 70, 200, 80, () => {
-      isFading = true;
-      fadeAlpha = 0;
-      setTimeout(() => {
-        window.location.href = "???";
-      }, 800);
-    }),
-    createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {
-      currentPage = "multiplayerOptions";
-      showMultiplayerOptions();
-    })
-  ];
-}
-function drawMultiArduinoInstructions() {
-  fill(0, 180);
-  rect(width / 2 - 300, height / 2 - 200, 600, 250, 20);
-  textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(28);
-  text("\nTO BE DECIDED.", width / 2, height / 2 - 100);
-  drawButtons();
-}
-
 
 // ---------------- LEADERBOARDS ----------------
 function showASLLeaderboard() {
   currentPage = "aslLeaderboard";
   buttons = [
-    createButtonObj("Back", width / 2 - 100, height - 100, 200, 60, () => { showMultiplayerOptions(); })
-  ];
-}
-function showArduinoLeaderboard() {
-  currentPage = "arduinoLeaderboard";
-  buttons = [
-    createButtonObj("Back", width / 2 - 100, height - 100, 200, 60, () => { showMultiplayerOptions(); })
+    createButtonObj("Back", width / 2 - 100, height - 100, 200, 60, () => { showSinglePlayerInstruc(); })
   ];
 }
 
@@ -410,35 +343,6 @@ function drawASLLeaderboard() {
   });
 }
 
-function drawArduinoLeaderboard() {
-  fill(0, 180);
-  rect(width / 2 - 300, height / 2 - 220, 600, 410, 20);
-  textAlign(CENTER, CENTER);
-  fill(255);
-  textSize(36);
-  text("Arduino Coder Leaderboard", width / 2, height / 2 - 180);
-
-  textSize(15);
-  let startY = height / 2 - 140;
-  const sortedData = sortLeaderboard([...arduinoLeaderboardData]).slice(0, 10);
-  sortedData.forEach((player, index) => {
-    if (index === 0) {
-      let pulse = map(sin(frameCount * 0.1), -1, 1, 180, 255);
-      fill(pulse, pulse * 0.84, 0);
-    } else {
-      fill(255);
-    }
-    text(`${index + 1}. ${player.name} - ${player.score} pts`, width / 2, startY + index * 35);
-  });
-}
-
-
-
-
-
-
-
-
 
 
 // ---------------- UTILITIES ----------------
@@ -457,6 +361,7 @@ async function checkCameraAccess() {
   }
 }
 
+
 function userIsOnline() {
   let boxWidth = 150;
   let boxHeight = 40;
@@ -466,6 +371,7 @@ function userIsOnline() {
   rect(x, y, boxWidth, boxHeight, 10);
   let status = navigator.onLine ? "Online ✅" : "Offline ❌";
   fill(255);
+  textSize(24); // <-- Add this to keep it consistent
   text(status, x + boxWidth / 2, y + boxHeight / 2);
   return navigator.onLine;
 }
@@ -513,4 +419,63 @@ function handleHandInteraction(sx, sy, sw, sh) {
     }
   });
   lastPinch = isPinching;
+}
+
+function drawHandSkeleton(hand, fingers) {
+  // Helper to safely fetch a point and map it to canvas coords
+  const mapPt = (name) => {
+    const pt = hand[name];
+    if (!pt) return null;
+    const x = map(pt.x, 0, video.width, 0, width);
+    const y = map(pt.y, 0, video.height, 0, height);
+    return { x, y };
+  };
+
+  // Draw all visible keypoints
+  for (const name in hand) {
+    const p = mapPt(name);
+    if (!p) continue;
+    noStroke();
+    fill('cyan');
+    ellipse(p.x, p.y, 12, 12);
+  }
+
+  // Draw fingers (mcp → pip → dip → tip)
+  stroke(255);
+  strokeWeight(2);
+  for (const finger in fingers) {
+    const chain = fingers[finger]
+      .map(mapPt)
+      .filter(Boolean); // drop missing points
+    for (let i = 0; i < chain.length - 1; i++) {
+      line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
+    }
+  }
+
+  // Draw palm: chain MCPs and connect wrist to MCPs
+  const palmChainNames = [
+    "thumb_cmc",
+    "index_finger_mcp",
+    "middle_finger_mcp",
+    "ring_finger_mcp",
+    "pinky_finger_mcp",
+  ];
+  const palmChain = palmChainNames.map(mapPt).filter(Boolean);
+  for (let i = 0; i < palmChain.length - 1; i++) {
+    line(palmChain[i].x, palmChain[i].y, palmChain[i + 1].x, palmChain[i + 1].y);
+  }
+
+  const wrist = mapPt("wrist");
+  if (wrist) {
+    for (const mcpName of [
+      "index_finger_mcp",
+      "middle_finger_mcp",
+      "ring_finger_mcp",
+      "pinky_finger_mcp",
+      "thumb_cmc"
+    ]) {
+      const mcp = mapPt(mcpName);
+      if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
+    }
+  }
 }

@@ -29,6 +29,14 @@ const PLAYER_TIMEOUT = 60000; // Increased to 60s
 let lastMatchTime = 0;
 let gameState = "waiting";
 
+const fingers = {
+  thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
+  index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
+  middle: ["middle_finger_mcp", "middle_finger_pip", "middle_finger_dip", "middle_finger_tip"],
+  ring: ["ring_finger_mcp", "ring_finger_pip", "ring_finger_dip", "ring_finger_tip"],
+  pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
+};
+
 
 // ---------------- PRELOAD ----------------
 function preload() {
@@ -303,7 +311,7 @@ function getRandomLetterAndNumber() {
 
 // ---------------- DRAW ----------------
 function draw() {
-  background(30);
+  drawSpaceBackground(); // Black background with stars
   if (currentState === "menu") drawMenu();
   else if (currentState === "room") drawRoom();
   else if (currentState === "countdown") drawCountdown();
@@ -317,7 +325,7 @@ function draw() {
 // ---------------- MENU ----------------
 
 function drawMenu() {
-  background(30);
+  drawSpaceBackground()
 
   if (errorMessage && millis() - errorTimer < 3000) {
     fill(255, 0, 0);
@@ -481,7 +489,9 @@ function drawPlayerCount() {
 
 // ---------------- GAME ----------------
 function drawGame() {
-  drawPixelatedVideo();
+  if (hands.length > 0) {
+    drawHandSkeleton(hands[0], fingers);
+  }
   if (millis() - startTime >= gameDuration) {
     endGame();
     return;
@@ -748,22 +758,83 @@ function flattenHandData() {
   return handData;
 }
 
-// ---------------- PIXELATED VIDEO ----------------
-function drawPixelatedVideo() {
-  const pixelSize = 20;
-  video.loadPixels();
-  for (let y = 0; y < video.height; y += pixelSize) {
-    for (let x = 0; x < video.width; x += pixelSize) {
-      const i = (y * video.width + x) * 4;
-      const r = video.pixels[i], g = video.pixels[i + 1], b = video.pixels[i + 2];
-      fill(r, g, b);
-      noStroke();
-      rect(
-        map(x, 0, video.width, 0, width),
-        map(y, 0, video.height, 0, height),
-        map(pixelSize, 0, video.width, 0, width),
-        map(pixelSize, 0, video.height, 0, height)
-      );
+function drawSpaceBackground() {
+  background(0); // Black space
+  noStroke();
+  if (!drawSpaceBackground.stars) {
+    drawSpaceBackground.stars = [];
+    const numStars = 200;
+    for (let i = 0; i < numStars; i++) {
+      drawSpaceBackground.stars.push({
+        x: random(width),
+        y: random(height),
+        size: random(1, 3),
+        phase: random(TWO_PI)
+      });
+    }
+  }
+  for (let s of drawSpaceBackground.stars) {
+    let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
+    fill(255, alpha);
+    ellipse(s.x, s.y, s.size, s.size);
+  }
+}
+
+function drawHandSkeleton(hand, fingers) {
+  // Helper to safely fetch a point and map it to canvas coords
+  const mapPt = (name) => {
+    const pt = hand[name];
+    if (!pt) return null;
+    const x = map(pt.x, 0, video.width, 0, width);
+    const y = map(pt.y, 0, video.height, 0, height);
+    return { x, y };
+  };
+
+  // Draw all visible keypoints
+  for (const name in hand) {
+    const p = mapPt(name);
+    if (!p) continue;
+    noStroke();
+    fill('cyan');
+    ellipse(p.x, p.y, 12, 12);
+  }
+
+  // Draw fingers (mcp → pip → dip → tip)
+  stroke(255);
+  strokeWeight(2);
+  for (const finger in fingers) {
+    const chain = fingers[finger]
+      .map(mapPt)
+      .filter(Boolean); // drop missing points
+    for (let i = 0; i < chain.length - 1; i++) {
+      line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
+    }
+  }
+
+  // Draw palm: chain MCPs and connect wrist to MCPs
+  const palmChainNames = [
+    "thumb_cmc",
+    "index_finger_mcp",
+    "middle_finger_mcp",
+    "ring_finger_mcp",
+    "pinky_finger_mcp",
+  ];
+  const palmChain = palmChainNames.map(mapPt).filter(Boolean);
+  for (let i = 0; i < palmChain.length - 1; i++) {
+    line(palmChain[i].x, palmChain[i].y, palmChain[i + 1].x, palmChain[i + 1].y);
+  }
+
+  const wrist = mapPt("wrist");
+  if (wrist) {
+    for (const mcpName of [
+      "index_finger_mcp",
+      "middle_finger_mcp",
+      "ring_finger_mcp",
+      "pinky_finger_mcp",
+      "thumb_cmc"
+    ]) {
+      const mcp = mapPt(mcpName);
+      if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
     }
   }
 }

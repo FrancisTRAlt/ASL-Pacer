@@ -8,6 +8,8 @@ const classifyInterval = 200; // ms
 let lastMatchTime = 0;
 
 let connections;
+let arduinoConnected = false;
+let arduinoMessage = "";
 
 // Game states
 let currentState = "menu"; // "menu", "countdown", "game", "gameover"
@@ -72,19 +74,25 @@ function setup() {
 }
 
 // ---------------- DRAW ----------------
-
 function draw() {
-  drawSpaceBackground(); // Black background with stars
+  drawSpaceBackground();
+  // Update button visibility based on state
   if (currentState === "menu") {
+    buttons.forEach(btn => btn.visible = ["Start Game", "Exit", "Arduino"].includes(btn.label));
     drawMenu();
+  } else if (currentState === "arduino") {
+    buttons.forEach(btn => btn.visible = ["Connect", "Back"].includes(btn.label));
+    drawArduinoPage();
   } else if (currentState === "countdown") {
     drawCountdown();
   } else if (currentState === "game") {
     drawGame();
   } else if (currentState === "gameover") {
+    buttons.forEach(btn => btn.visible = ["Restart", "Main Menu"].includes(btn.label));
     drawGameOver();
   }
 }
+
 
 // ---------------- COUNTDOWN ----------------
 function drawCountdown() {
@@ -112,7 +120,7 @@ function drawMenu() {
   text("ASL Survival", width / 2, height / 2 - 150);
 
   // Show
-  buttons.filter(btn => btn.label === "Start Game" || btn.label === "Exit")
+  buttons.filter(btn => btn.label === "Start Game" || btn.label === "Exit" || btn.label === "Arduino")
     .forEach(btn => btn.show());
 }
 
@@ -211,11 +219,12 @@ class Button {
     this.h = h;
     this.label = label;
     this.callback = callback;
+    this.visible = true; // New property
   }
 
-
   show() {
-    fill(this.isHovered() ? color(100, 150, 255) : 80); // Hover color
+    if (!this.visible) return;
+    fill(this.isHovered() ? color(100, 150, 255) : 80);
     rect(this.x, this.y, this.w, this.h, 10);
     fill(255);
     textAlign(CENTER, CENTER);
@@ -223,9 +232,9 @@ class Button {
     text(this.label, this.x + this.w / 2, this.y + this.h / 2);
   }
 
-
   isHovered() {
-    return mouseX > this.x && mouseX < this.x + this.w &&
+    return this.visible &&
+      mouseX > this.x && mouseX < this.x + this.w &&
       mouseY > this.y && mouseY < this.y + this.h;
   }
 
@@ -234,10 +243,18 @@ class Button {
   }
 }
 
+
 // ---------------- MOUSE CLICK ----------------
+
 function mousePressed() {
-  buttons.forEach(btn => btn.click());
+  for (let btn of buttons) {
+    if (btn.visible && btn.isHovered()) {
+      btn.click();
+      return; // Stop after first button
+    }
+  }
 }
+
 
 // ---------------- CALLBACKS ----------------
 function gotHands(results) {
@@ -265,151 +282,200 @@ function gotClassification(results) {
 }
 
 
-  function modelLoaded() {
-    buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Start Game", () => startCountdown()));
-    buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Exit", () => window.location.href = "../index.html"));
+function modelLoaded() {
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Start Game", () => startCountdown()));
+  buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Exit", () => window.location.href = "../index.html"));
 
-    // Add restart button for game over
-    buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Restart", () => restartGame()));
-    buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Main Menu", () => {
-      currentState = "menu";
-      playerScore = 0;
-      currentWord = random(words).toUpperCase();
-      currentIndex = 0;
-    }));
-  }
-
-  function startCountdown() {
-    currentState = "countdown";
-    countdownStartTime = millis();
-  }
-
-  function endGame() {
-    currentState = "gameover";
-  }
-
-  function restartGame() {
+  // Add restart button for game over
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Restart", () => restartGame()));
+  buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Main Menu", () => {
+    currentState = "menu";
     playerScore = 0;
     currentWord = random(words).toUpperCase();
     currentIndex = 0;
-    startCountdown();
-  }
-
-  // ---------------- HAND DATA ----------------
-  function flattenHandData() {
-    if (!hands[0]) return [];
-
-    let hand = hands[0];
-    let xs = hand.keypoints.map(k => k.x);
-    let ys = hand.keypoints.map(k => k.y);
-    let minX = Math.min(...xs), maxX = Math.max(...xs);
-    let minY = Math.min(...ys), maxY = Math.max(...ys);
-
-    let handData = [];
-
-    for (let i = 0; i < hand.keypoints.length; i++) {
-      let keypoint = hand.keypoints[i];
-      let normX = (keypoint.x - minX) / (maxX - minX);
-      let normY = (keypoint.y - minY) / (maxY - minY);
-      handData.push(normX, normY);
-    }
-
-    for (let j = 0; j < connections.length; j++) {
-      let pointAIndex = connections[j][0];
-      let pointBIndex = connections[j][1];
-      let pointA = hand.keypoints[pointAIndex];
-      let pointB = hand.keypoints[pointBIndex];
-
-      let dx = (pointB.x - pointA.x) / (maxX - minX);
-      let dy = (pointB.y - pointA.y) / (maxY - minY);
-      let distance = Math.sqrt(dx * dx + dy * dy);
-      let angle = Math.atan2(dy, dx) / Math.PI;
-
-      handData.push(distance);
-      handData.push(angle);
-    }
-
-    return handData;
-  }
+  }));
 
 
-  function drawSpaceBackground() {
-    background(0); // Black space
-    noStroke();
-    if (!drawSpaceBackground.stars) {
-      drawSpaceBackground.stars = [];
-      const numStars = 200;
-      for (let i = 0; i < numStars; i++) {
-        drawSpaceBackground.stars.push({
-          x: random(width),
-          y: random(height),
-          size: random(1, 3),
-          phase: random(TWO_PI)
+  buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Arduino", () => {
+    currentState = "arduino";
+  }));
+
+
+
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Connect", () => {
+    console.log("Attempting Arduino connection...");
+    arduinoMessage = "Connecting...";
+
+    // Example: Use Web Serial API
+    if ("serial" in navigator) {
+      navigator.serial.requestPort()
+        .then(port => port.open({ baudRate: 9600 }))
+        .then(() => {
+          arduinoConnected = true;
+          arduinoMessage = "Connected!";
+          startCountdown(); // Move to countdown
+        })
+        .catch(err => {
+          arduinoConnected = false;
+          arduinoMessage = "Connection failed. Try again.";
+          console.error(err);
         });
-      }
+    } else {
+      arduinoMessage = "Web Serial not supported.";
     }
-    for (let s of drawSpaceBackground.stars) {
-      let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
-      fill(255, alpha);
-      ellipse(s.x, s.y, s.size, s.size);
+  }));
+
+  buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Back", () => {
+    currentState = "menu";
+  }));
+}
+
+
+function drawArduinoPage() {
+  textAlign(CENTER, CENTER);
+  fill(255);
+  textSize(64);
+  text("Arduino Setup", width / 2, height / 2 - 150);
+
+  textSize(32);
+  text(arduinoMessage, width / 2, height / 2);
+
+  buttons.filter(btn => btn.label === "Connect" || btn.label === "Back")
+    .forEach(btn => btn.show());
+}
+
+
+function startCountdown() {
+  currentState = "countdown";
+  countdownStartTime = millis();
+}
+
+function endGame() {
+  currentState = "gameover";
+}
+
+function restartGame() {
+  playerScore = 0;
+  currentWord = random(words).toUpperCase();
+  currentIndex = 0;
+  startCountdown();
+}
+
+// ---------------- HAND DATA ----------------
+function flattenHandData() {
+  if (!hands[0]) return [];
+
+  let hand = hands[0];
+  let xs = hand.keypoints.map(k => k.x);
+  let ys = hand.keypoints.map(k => k.y);
+  let minX = Math.min(...xs), maxX = Math.max(...xs);
+  let minY = Math.min(...ys), maxY = Math.max(...ys);
+
+  let handData = [];
+
+  for (let i = 0; i < hand.keypoints.length; i++) {
+    let keypoint = hand.keypoints[i];
+    let normX = (keypoint.x - minX) / (maxX - minX);
+    let normY = (keypoint.y - minY) / (maxY - minY);
+    handData.push(normX, normY);
+  }
+
+  for (let j = 0; j < connections.length; j++) {
+    let pointAIndex = connections[j][0];
+    let pointBIndex = connections[j][1];
+    let pointA = hand.keypoints[pointAIndex];
+    let pointB = hand.keypoints[pointBIndex];
+
+    let dx = (pointB.x - pointA.x) / (maxX - minX);
+    let dy = (pointB.y - pointA.y) / (maxY - minY);
+    let distance = Math.sqrt(dx * dx + dy * dy);
+    let angle = Math.atan2(dy, dx) / Math.PI;
+
+    handData.push(distance);
+    handData.push(angle);
+  }
+
+  return handData;
+}
+
+
+function drawSpaceBackground() {
+  background(0); // Black space
+  noStroke();
+  if (!drawSpaceBackground.stars) {
+    drawSpaceBackground.stars = [];
+    const numStars = 200;
+    for (let i = 0; i < numStars; i++) {
+      drawSpaceBackground.stars.push({
+        x: random(width),
+        y: random(height),
+        size: random(1, 3),
+        phase: random(TWO_PI)
+      });
+    }
+  }
+  for (let s of drawSpaceBackground.stars) {
+    let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
+    fill(255, alpha);
+    ellipse(s.x, s.y, s.size, s.size);
+  }
+}
+
+function drawHandSkeleton(hand, fingers) {
+  // Helper to safely fetch a point and map it to canvas coords
+  const mapPt = (name) => {
+    const pt = hand[name];
+    if (!pt) return null;
+    const x = map(pt.x, 0, video.width, 0, width);
+    const y = map(pt.y, 0, video.height, 0, height);
+    return { x, y };
+  };
+
+  // Draw all visible keypoints
+  for (const name in hand) {
+    const p = mapPt(name);
+    if (!p) continue;
+    noStroke();
+    fill('cyan');
+    ellipse(p.x, p.y, 12, 12);
+  }
+
+  // Draw fingers (mcp → pip → dip → tip)
+  stroke(255);
+  strokeWeight(2);
+  for (const finger in fingers) {
+    const chain = fingers[finger]
+      .map(mapPt)
+      .filter(Boolean); // drop missing points
+    for (let i = 0; i < chain.length - 1; i++) {
+      line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
     }
   }
 
-  function drawHandSkeleton(hand, fingers) {
-    // Helper to safely fetch a point and map it to canvas coords
-    const mapPt = (name) => {
-      const pt = hand[name];
-      if (!pt) return null;
-      const x = map(pt.x, 0, video.width, 0, width);
-      const y = map(pt.y, 0, video.height, 0, height);
-      return { x, y };
-    };
+  // Draw palm: chain MCPs and connect wrist to MCPs
+  const palmChainNames = [
+    "thumb_cmc",
+    "index_finger_mcp",
+    "middle_finger_mcp",
+    "ring_finger_mcp",
+    "pinky_finger_mcp",
+  ];
+  const palmChain = palmChainNames.map(mapPt).filter(Boolean);
+  for (let i = 0; i < palmChain.length - 1; i++) {
+    line(palmChain[i].x, palmChain[i].y, palmChain[i + 1].x, palmChain[i + 1].y);
+  }
 
-    // Draw all visible keypoints
-    for (const name in hand) {
-      const p = mapPt(name);
-      if (!p) continue;
-      noStroke();
-      fill('cyan');
-      ellipse(p.x, p.y, 12, 12);
-    }
-
-    // Draw fingers (mcp → pip → dip → tip)
-    stroke(255);
-    strokeWeight(2);
-    for (const finger in fingers) {
-      const chain = fingers[finger]
-        .map(mapPt)
-        .filter(Boolean); // drop missing points
-      for (let i = 0; i < chain.length - 1; i++) {
-        line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
-      }
-    }
-
-    // Draw palm: chain MCPs and connect wrist to MCPs
-    const palmChainNames = [
-      "thumb_cmc",
+  const wrist = mapPt("wrist");
+  if (wrist) {
+    for (const mcpName of [
       "index_finger_mcp",
       "middle_finger_mcp",
       "ring_finger_mcp",
       "pinky_finger_mcp",
-    ];
-    const palmChain = palmChainNames.map(mapPt).filter(Boolean);
-    for (let i = 0; i < palmChain.length - 1; i++) {
-      line(palmChain[i].x, palmChain[i].y, palmChain[i + 1].x, palmChain[i + 1].y);
-    }
-
-    const wrist = mapPt("wrist");
-    if (wrist) {
-      for (const mcpName of [
-        "index_finger_mcp",
-        "middle_finger_mcp",
-        "ring_finger_mcp",
-        "pinky_finger_mcp",
-        "thumb_cmc"
-      ]) {
-        const mcp = mapPt(mcpName);
-        if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
-      }
+      "thumb_cmc"
+    ]) {
+      const mcp = mapPt(mcpName);
+      if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
     }
   }
+}

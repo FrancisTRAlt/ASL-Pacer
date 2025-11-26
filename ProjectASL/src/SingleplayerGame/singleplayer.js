@@ -302,22 +302,32 @@ function modelLoaded() {
 
 
 
+
   buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Connect", () => {
     console.log("Attempting Arduino connection...");
     arduinoMessage = "Connecting...";
-
-    // Example: Use Web Serial API
     if ("serial" in navigator) {
       navigator.serial.requestPort()
-        .then(port => port.open({ baudRate: 9600 }))
+        .then(port => {
+          const info = port.getInfo();
+          console.log("VID:", info.usbVendorId, "PID:", info.usbProductId);
+
+          // Check if it's Arduino Nano 33 BLE
+          if (info.usbVendorId === 0x2341 && (info.usbProductId === 0x805a || info.usbProductId === 0x005a)) {
+            console.log("Arduino Nano 33 BLE detected!");
+            return port.open({ baudRate: 9600 });
+          } else {
+            throw new Error("Not an Arduino Nano 33 BLE. VID/PID mismatch.");
+          }
+        })
         .then(() => {
           arduinoConnected = true;
           arduinoMessage = "Connected!";
-          startCountdown(); // Move to countdown
+          startCountdown();
         })
         .catch(err => {
           arduinoConnected = false;
-          arduinoMessage = "Connection failed. Try again.";
+          arduinoMessage = "Connection failed or wrong device.";
           console.error(err);
         });
     } else {

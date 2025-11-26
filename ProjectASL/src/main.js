@@ -31,29 +31,44 @@ const fingers = {
 
 
 // Dummy leaderboard data
-let aslLeaderboardData = [
-  { name: "PlayerOne", score: 120 },
-  { name: "PlayerTwo", score: 95 },
-  { name: "PlayerThree", score: 80 },
-  { name: "PlayerFour", score: 70 },
-  { name: "PlayerFive", score: 60 },
-  { name: "PlayerSix", score: 55 },
-  { name: "PlayerSeven", score: 50 },
-  { name: "PlayerEight", score: 45 },
-  { name: "PlayerNine", score: 40 },
-  { name: "PlayerTen", score: 35 },
-  { name: "PlayerEleven", score: 30 }
-];
+let aslLeaderboardData = [];
+let supabaseClient;
 
 // Sort function
 function sortLeaderboard(data) {
   return data.sort((a, b) => b.score - a.score);
 }
 
+async function loadConfigAndInitSupabase() {
+  const response = await fetch('config.json'); // Path to your JSON file
+  const config = await response.json();
+
+  supabaseClient = supabase.createClient(config.supabase.url, config.supabase.anonKey);
+
+  console.log('Supabase initialized');
+}
+
+
+async function fetchLeaderboard() {
+  const { data, error } = await supabaseClient
+    .from('ASL-DataBase')
+    .select('*')
+    .order('Miles', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching leaderboard:', error);
+    return [];
+  }
+  return data;
+}
+
+
 // ---------------- SETUP ----------------
 
 async function setup() {
   createCanvas(800, 600);
+  await loadConfigAndInitSupabase()
+  aslLeaderboardData = await fetchLeaderboard();
 
   // Start loading
   isLoading = true;
@@ -117,7 +132,7 @@ function draw() {
       drawHandSkeleton(hands[0], fingers);
       userIsOnline();
       drawButtons();
-    }else {
+    } else {
       textAlign(CENTER, CENTER);
       textSize(36);
       fill(255);
@@ -354,6 +369,7 @@ function showASLLeaderboard() {
   ];
 }
 
+
 function drawASLLeaderboard() {
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 220, 600, 410, 20);
@@ -364,7 +380,10 @@ function drawASLLeaderboard() {
 
   textSize(15);
   let startY = height / 2 - 140;
-  const sortedData = sortLeaderboard([...aslLeaderboardData]).slice(0, 10);
+
+  // Sort by Miles (or Coins if you prefer)
+  const sortedData = [...aslLeaderboardData].sort((a, b) => b.Miles - a.Miles).slice(0, 10);
+
   sortedData.forEach((player, index) => {
     if (index === 0) {
       let pulse = map(sin(frameCount * 0.1), -1, 1, 180, 255);
@@ -372,7 +391,13 @@ function drawASLLeaderboard() {
     } else {
       fill(255);
     }
-    text(`${index + 1}. ${player.name} - ${player.score} pts`, width / 2, startY + index * 35);
+
+    // Display PlayerName, Miles, and Coins
+    text(
+      `${index + 1}. ${player.PlayerName} - ${player.Miles} miles | ${player.Coins} coins`,
+      width / 2,
+      startY + index * 35
+    );
   });
 }
 

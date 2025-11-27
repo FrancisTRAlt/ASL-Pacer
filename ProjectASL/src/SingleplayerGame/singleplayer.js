@@ -45,6 +45,17 @@ let player;
 // HUD style constants
 let HUD;
 
+
+let supabaseClient;
+
+async function initSupabase() {
+  const response = await fetch('../config.json'); // adjust path
+  const config = await response.json();
+  supabaseClient = supabase.createClient(config.supabase.url, config.supabase.anonKey);
+  console.log('Supabase initialized in singleplayer');
+}
+
+
 // ---------------- PRELOAD ----------------
 function preload() {
   handPose = ml5.handPose({ flipped: true });
@@ -99,6 +110,12 @@ function setup() {
   // Initialize first word
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
+
+  if (navigator.onLine) {
+    initSupabase();
+  } else {
+    console.warn("Offline: Supabase will not be initialized.");
+  }
 }
 
 // ---------------- DRAW ----------------
@@ -397,22 +414,20 @@ function modelLoaded() {
 
 
   buttons.push(new Button(width / 2 - 100, height / 2 + 120, 240, 60, "Pay", () => {
-    let requiredCoins = 5 + (checkpointsReached - 1) * 2; // dynamic cost
+    let requiredCoins = 5 + (checkpointsReached - 1) * 2;
     if (player.coins >= requiredCoins) {
       player.coins -= requiredCoins;
+      resetWord();
+      currentState = "game"; // Safe because HP isn't affected
     } else {
-      applyPenalty();
+      applyPenalty(); // Handles gameover or continue
     }
-    resetWord();
-    currentState = "game";
   }));
 
 
 
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 240, 60, "Proceed without Pay", () => {
     applyPenalty();
-    resetWord(); // refresh word
-    currentState = "game";
   }));
 }
 
@@ -438,9 +453,38 @@ function startCountdown() {
   nextCheckpointTime = null; // will set after game starts
 }
 
-function endGame() {
+
+async function endGame() {
   currentState = "gameover";
+
+  // Prepare data
+  const gameData = {
+    PlayerName: player.name,
+    Miles: playerScore,
+    Coins: player.coins,
+    // HealthRemaining: player.health,
+    // CheckpointsReached: checkpointsReached,
+    // Timestamp: new Date().toISOString()
+  };
+
+  // Insert into Supabase
+
+
+  if (navigator.onLine) {
+    const { data, error } = await supabaseClient
+      .from('ASL-DataBase') // your table name
+      .insert([gameData]);
+
+    if (error) {
+      console.error('Error inserting game data:', error);
+    } else {
+      console.log('Game data inserted:', data);
+    }
+  } else {
+    console.warn("Offline.");
+  }
 }
+
 
 function restartGame() {
   playerScore = 0;

@@ -17,7 +17,11 @@ let countdownStartTime = null;
 let startTime = null;
 let gameDuration = 60000; // 1 minute
 let playerScore = 0;
-let playerName = "";
+
+//Checkpoints
+let checkpointsReached = 0;
+let checkpointInterval = 60000; // 1 minute
+let nextCheckpointTime = null;
 
 // Word game state
 let words = [];
@@ -35,6 +39,12 @@ const fingers = {
   pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
 };
 
+// --- PLAYER STATE ---
+let player;
+
+// HUD style constants
+let HUD;
+
 // ---------------- PRELOAD ----------------
 function preload() {
   handPose = ml5.handPose({ flipped: true });
@@ -44,7 +54,25 @@ function preload() {
 // ---------------- SETUP ----------------
 function setup() {
   createCanvas(800, 600);
-  playerName = "Player" + floor(random(1000, 9999));
+  player = {
+    name: "",        // will be set in setup()
+    health: 50,     // UI only for now
+    maxHealth: 50,
+    coins: 0         // UI only for now
+  };
+  // HUD style constants
+  HUD = {
+    x: 30,
+    y: 20,
+    width: 300,
+    height: 26,
+    bgColor: color(30, 30, 30, 180),
+    borderColor: color("cyan"),
+    nameColor: color(255),
+    coinColor: color(255, 215, 0), // gold
+    spacing: 12
+  };
+  player.name = "Player" + floor(random(1000, 9999));
 
   // Webcam setup
   video = createCapture(VIDEO, { flipped: true });
@@ -87,6 +115,8 @@ function draw() {
     drawCountdown();
   } else if (currentState === "game") {
     drawGame();
+  } else if (currentState === "checkpoint") {
+    drawCheckpoint();
   } else if (currentState === "gameover") {
     buttons.forEach(btn => btn.visible = ["Restart", "Main Menu"].includes(btn.label));
     drawGameOver();
@@ -119,6 +149,8 @@ function drawMenu() {
   textSize(64);
   text("ASL Survival", width / 2, height / 2 - 150);
 
+  drawHUD(); //Remove later
+
   // Show
   buttons.filter(btn => btn.label === "Start Game" || btn.label === "Exit" || btn.label === "Arduino")
     .forEach(btn => btn.show());
@@ -131,9 +163,18 @@ function drawGame() {
   }
 
 
-  // Check game duration
-  if (millis() - startTime >= gameDuration) {
-    endGame();
+  // HUD
+  drawHUD();
+
+  // Endless checkpoint logic
+  let elapsed = millis() - startTime;
+
+  if (!nextCheckpointTime) nextCheckpointTime = startTime + checkpointInterval;
+
+  if (millis() >= nextCheckpointTime) {
+    currentState = "checkpoint";
+    checkpointsReached++;
+    nextCheckpointTime += checkpointInterval;
     return;
   }
 
@@ -182,7 +223,6 @@ function drawGame() {
   strokeWeight(0);
 
   // Timer
-  let elapsed = millis() - startTime;
   let seconds = floor(elapsed / 1000);
   let minutes = floor(seconds / 60);
   seconds = seconds % 60;
@@ -194,6 +234,7 @@ function drawGame() {
 }
 
 // ---------------- GAME OVER ----------------
+
 function drawGameOver() {
   textAlign(CENTER, CENTER);
   fill(255);
@@ -201,13 +242,16 @@ function drawGameOver() {
   text("Game Over!", width / 2, height / 2 - 100);
 
   textSize(32);
-  text(`Username: ${playerName}`, width / 2, height / 2);
+  text(`Username: ${player.name}`, width / 2, height / 2);
   text(`Words Completed: ${playerScore}`, width / 2, height / 2 + 60);
 
-  // Show
-  buttons.filter(btn => btn.label === "Restart" || btn.label === "Main Menu")
-    .forEach(btn => btn.show());
+  // Optional: show final HUD snapshot
+  drawHUD();
 
+  // Show
+  buttons.filter(btn => btn.label === "Restart" ||
+    btn.label === "Main Menu")
+    .forEach(btn => btn.show());
 }
 
 // ---------------- BUTTON CLASS ----------------
@@ -274,6 +318,14 @@ function gotClassification(results) {
       lastMatchTime = now;
       if (currentIndex >= currentWord.length) {
         playerScore++;
+
+        // Reward coins based on word length
+        if (currentWord.length <= 4) {
+          player.coins += 1; // small word
+        } else {
+          player.coins += 2; // big word
+        }
+
         currentWord = random(words).toUpperCase();
         currentIndex = 0;
       }
@@ -291,6 +343,8 @@ function modelLoaded() {
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Main Menu", () => {
     currentState = "menu";
     playerScore = 0;
+    player.health = player.maxHealth; // Reset HP
+    player.coins = 0;                 // Reset coins
     currentWord = random(words).toUpperCase();
     currentIndex = 0;
   }));
@@ -338,6 +392,28 @@ function modelLoaded() {
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Back", () => {
     currentState = "menu";
   }));
+
+
+
+
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 240, 60, "Pay", () => {
+    let requiredCoins = 5 + (checkpointsReached - 1) * 2; // dynamic cost
+    if (player.coins >= requiredCoins) {
+      player.coins -= requiredCoins;
+    } else {
+      applyPenalty();
+    }
+    resetWord();
+    currentState = "game";
+  }));
+
+
+
+  buttons.push(new Button(width / 2 - 100, height / 2 + 200, 240, 60, "Proceed without Pay", () => {
+    applyPenalty();
+    resetWord(); // refresh word
+    currentState = "game";
+  }));
 }
 
 
@@ -358,6 +434,8 @@ function drawArduinoPage() {
 function startCountdown() {
   currentState = "countdown";
   countdownStartTime = millis();
+  checkpointsReached = 0;
+  nextCheckpointTime = null; // will set after game starts
 }
 
 function endGame() {
@@ -366,6 +444,8 @@ function endGame() {
 
 function restartGame() {
   playerScore = 0;
+  player.health = player.maxHealth; // Reset HP
+  player.coins = 0;                 // Reset coins
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
   startCountdown();
@@ -488,4 +568,108 @@ function drawHandSkeleton(hand, fingers) {
       if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
     }
   }
+}
+
+
+function drawHUD() {
+  // Panel background
+  noStroke();
+  fill(HUD.bgColor);
+  rect(HUD.x, HUD.y, 480, HUD.height + 50, 10);
+
+  // --- Player Name ---
+  fill(HUD.nameColor);
+  textAlign(LEFT, CENTER);
+  textSize(20);
+  text(`👤 ${player.name}`, HUD.x + 10, HUD.y + HUD.height / 2 + 4);
+
+  // --- Health Bar ---
+  const barX = HUD.x + 10;
+  const barY = HUD.y + HUD.height + HUD.spacing;
+  const barW = HUD.width;
+  const barH = HUD.height;
+
+  // Background bar
+  fill(20, 20, 20, 220);
+  rect(barX, barY, barW, barH, 6);
+
+  // Health fraction
+  const frac = constrain(player.health / player.maxHealth, 0, 1);
+
+  // Bar color (green → yellow → red)
+  const healthColor = lerpColor(
+    color(255, 0, 0),    // red
+    color(255, 255, 0),  // yellow
+    frac < 0.5 ? frac * 2 : 1
+  );
+  const healthColor2 = lerpColor(
+    color(255, 255, 0),  // yellow
+    color(0, 200, 0),    // green
+    frac < 0.5 ? 0 : (frac - 0.5) * 2
+  );
+  // blend across two ranges
+  const blended = frac < 0.5 ? healthColor : healthColor2;
+
+  fill(blended);
+  rect(barX, barY, barW * frac, barH, 6);
+
+  // Border and label
+  noFill();
+  stroke(HUD.borderColor);
+  strokeWeight(1.5);
+  rect(barX, barY, barW, barH, 6);
+  noStroke();
+  fill(255);
+  textSize(14);
+  textAlign(LEFT, CENTER);
+  text(`HP: ${player.health}/${player.maxHealth}`, barX + 6, barY + barH / 2);
+
+  // --- Coins ---
+  const coinTextX = HUD.x + barW + 30;
+  const coinTextY = HUD.y + HUD.height + HUD.spacing + barH / 2;
+
+  fill(HUD.coinColor);
+  textSize(18);
+  textAlign(LEFT, CENTER);
+  text(`🪙 Coins: ${player.coins}`, coinTextX, coinTextY);
+}
+
+
+
+function drawCheckpoint() {
+  background(0);
+  textAlign(CENTER, CENTER);
+  fill(255);
+  textSize(48);
+  text(`Checkpoint ${checkpointsReached}`, width / 2, height / 2 - 150);
+
+  textSize(32);
+  let requiredCoins = 5 + (checkpointsReached - 1) * 2;
+  text(`Need ${requiredCoins} coins to proceed safely`, width / 2, height / 2 - 60);
+
+  drawHUD();
+
+  // Show only Pay and Proceed buttons
+  buttons.forEach(btn => btn.visible = false);
+  buttons.filter(btn => btn.label === "Pay" || btn.label === "Proceed without Pay")
+    .forEach(btn => btn.visible = true);
+  buttons.filter(btn => btn.label === "Pay" || btn.label === "Proceed without Pay")
+    .forEach(btn => btn.show());
+}
+
+
+function applyPenalty() {
+  let damage = checkpointsReached * (player.coins + 1); // base damage even if coins = 0
+  player.health -= damage;
+  if (player.health <= 0) {
+    endGame();
+  } else {
+    resetWord();
+    currentState = "game";
+  }
+}
+
+function resetWord() {
+  currentWord = random(words).toUpperCase();
+  currentIndex = 0;
 }

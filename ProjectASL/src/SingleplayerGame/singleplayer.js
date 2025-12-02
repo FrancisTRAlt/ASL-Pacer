@@ -29,6 +29,10 @@ let words = [];
 let currentWord = "";
 let currentIndex = 0;
 
+let letterSpeeds = []; // Track time per letter
+let wordSpeeds = [];   // Track average time per word
+let letterStartTime = 0; // Start time for current letter
+
 // Buttons
 let buttons = [];
 
@@ -329,7 +333,7 @@ function gotHands(results) {
   hands = results;
 }
 
-function gotClassification(results) {
+async function gotClassification(results) {
   let sum = results.reduce((acc, r) => acc + r.confidence, 0);
   let normalized = results.map(r => ({ label: r.label, confidence: r.confidence / sum }));
   normalized.sort((a, b) => b.confidence - a.confidence);
@@ -340,8 +344,35 @@ function gotClassification(results) {
     if (normalized[0].label === expectedLetter && now - lastMatchTime > 500) {
       currentIndex++;
       lastMatchTime = now;
+
+      let timeTaken = now - letterStartTime;
+      letterSpeeds.push(timeTaken);
+      console.log(`Letter signed in ${(timeTaken / 1000).toFixed(2)} s`);
+      letterStartTime = now; // Reset for next letter
+
       if (currentIndex >= currentWord.length) {
+
+        let sum = letterSpeeds.reduce((a, b) => a + b, 0);
+        let avg = sum / letterSpeeds.length;
+        wordSpeeds.push(avg);
+        console.log(`Average word signing speed: ${(avg / 1000).toFixed(2)} s`);
+        letterSpeeds = [];
         playerScore++;
+
+        // Update Arduino with new average speed
+        if (arduinoConnected && arduinoPort && arduinoPort.writable) {
+          try {
+            const writer = arduinoPort.writable.getWriter();
+            let total = wordSpeeds.reduce((a, b) => a + b, 0);
+            let avgLetterSpeed = (total / wordSpeeds.length) / 1000; // ms to s
+            const message = `${player.name},${avgLetterSpeed.toFixed(2)}\n`;
+            await writer.write(new TextEncoder().encode(message));
+            console.log("Updated Arduino:", message);
+            writer.releaseLock();
+          } catch (err) {
+            console.error("Error updating Arduino:", err);
+          }
+        }
 
         // Reward coins based on word length
         if (currentWord.length <= 4) {
@@ -397,12 +428,31 @@ function modelLoaded() {
             throw new Error("Not an Arduino Nano 33 BLE. VID/PID mismatch.");
           }
         })
-        .then(() => {
+        .then(async () => {
           arduinoConnected = true;
           arduinoMessage = "Connected!";
           currentState = "menu";
-        })
-        .catch(err => {
+
+          // Compute current average letter speed (or 0 if none yet)
+          let avgLetterSpeed = 0;
+          if (wordSpeeds.length > 0) {
+            let sum = wordSpeeds.reduce((a, b) => a + b, 0);
+            avgLetterSpeed = (sum / wordSpeeds.length) / 1000; // ms to s
+          }
+
+          // Send player name and avg speed to Arduino
+          if (arduinoPort && arduinoPort.writable) {
+            try {
+              const writer = arduinoPort.writable.getWriter();
+              const message = `${player.name},${avgLetterSpeed.toFixed(2)}\n`;
+              await writer.write(new TextEncoder().encode(message));
+              console.log("Sent to Arduino on connect:", message);
+              writer.releaseLock();
+            } catch (err) {
+              console.error("Error sending initial data to Arduino:", err);
+            }
+          }
+        }).catch(err => {
           arduinoConnected = false;
           arduinoMessage = "Connection failed or wrong device.";
           console.error(err);
@@ -506,6 +556,16 @@ function startCountdown() {
 
 async function endGame() {
   currentState = "gameover";
+
+  if (wordSpeeds.length > 0) {
+    let maxAvg = Math.max(...wordSpeeds);
+    console.log(`Highest average signing speed: ${(maxAvg / 1000).toFixed(2)} s`);
+  } else {
+    console.log('No words completed, no speed data available.');
+  }
+  letterSpeeds = [];
+  wordSpeeds = [];
+  letterStartTime = 0;
 
   // Prepare data
   const gameData = {
@@ -766,4 +826,5 @@ function applyPenalty() {
 function resetWord() {
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
+  letterStartTime = millis(); // Start timing first letter
 }

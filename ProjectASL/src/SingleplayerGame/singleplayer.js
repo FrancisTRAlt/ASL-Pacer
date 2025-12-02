@@ -10,6 +10,7 @@ let lastMatchTime = 0;
 let connections;
 let arduinoConnected = false;
 let arduinoMessage = "";
+let arduinoPort = null; // Track the port globally
 
 // Game states
 let currentState = "menu"; // "menu", "countdown", "game", "gameover"
@@ -126,7 +127,7 @@ function draw() {
     buttons.forEach(btn => btn.visible = ["Start Game", "Exit", "Arduino"].includes(btn.label));
     drawMenu();
   } else if (currentState === "arduino") {
-    buttons.forEach(btn => btn.visible = ["Connect", "Back"].includes(btn.label));
+    buttons.forEach(btn => btn.visible = ["Connect", "Disconnect", "Back"].includes(btn.label));
     drawArduinoPage();
   } else if (currentState === "countdown") {
     drawCountdown();
@@ -171,6 +172,12 @@ function drawMenu() {
   // Show
   buttons.filter(btn => btn.label === "Start Game" || btn.label === "Exit" || btn.label === "Arduino")
     .forEach(btn => btn.show());
+
+  // Arduino status bottom-right
+  textAlign(RIGHT, BOTTOM);
+  textSize(20);
+  fill(arduinoConnected ? "lime" : "red");
+  text(arduinoConnected ? "Arduino Connected" : "Arduino Disconnected", width - 20, height - 20);
 }
 
 function drawGame() {
@@ -374,16 +381,15 @@ function modelLoaded() {
 
 
 
-  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Connect", () => {
+  buttons.push(new Button(width / 2 - 220, height / 2 + 120, 200, 60, "Connect", () => {
     console.log("Attempting Arduino connection...");
     arduinoMessage = "Connecting...";
     if ("serial" in navigator) {
       navigator.serial.requestPort()
         .then(port => {
+          arduinoPort = port;
           const info = port.getInfo();
           console.log("VID:", info.usbVendorId, "PID:", info.usbProductId);
-
-          // Check if it's Arduino Nano 33 BLE
           if (info.usbVendorId === 0x2341 && (info.usbProductId === 0x805a || info.usbProductId === 0x005a)) {
             console.log("Arduino Nano 33 BLE detected!");
             return port.open({ baudRate: 9600 });
@@ -394,16 +400,60 @@ function modelLoaded() {
         .then(() => {
           arduinoConnected = true;
           arduinoMessage = "Connected!";
-          startCountdown();
+          currentState = "menu";
         })
         .catch(err => {
           arduinoConnected = false;
           arduinoMessage = "Connection failed or wrong device.";
           console.error(err);
+
         });
+
+      arduinoPort = port; // Save globally
+
     } else {
       arduinoMessage = "Web Serial not supported.";
     }
+  }));
+
+
+
+
+  buttons.push(new Button(width / 2 + 20, height / 2 + 120, 200, 60, "Disconnect", async () => {
+    if (arduinoPort) {
+      try {
+        // Cancel any active reader
+        if (arduinoPort.readable) {
+          const reader = arduinoPort.readable.getReader();
+          await reader.cancel();
+          reader.releaseLock();
+        }
+
+        // Cancel any active writer
+        if (arduinoPort.writable) {
+          const writer = arduinoPort.writable.getWriter();
+          await writer.close();
+          writer.releaseLock();
+        }
+
+        // Close the port
+        await arduinoPort.close();
+
+        // Update state
+        arduinoConnected = false;
+        arduinoMessage = "Disconnected!";
+        currentState = "menu";
+        arduinoPort = null;
+        console.log("Arduino disconnected successfully.");
+      } catch (err) {
+        console.error("Error disconnecting:", err);
+        arduinoMessage = "Error disconnecting.";
+      }
+    } else {
+      arduinoMessage = "No device connected.";
+    }
+
+
   }));
 
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Back", () => {
@@ -441,7 +491,7 @@ function drawArduinoPage() {
   textSize(32);
   text(arduinoMessage, width / 2, height / 2);
 
-  buttons.filter(btn => btn.label === "Connect" || btn.label === "Back")
+  buttons.filter(btn => btn.label === "Connect" || btn.label === "Disconnect" || btn.label === "Back")
     .forEach(btn => btn.show());
 }
 

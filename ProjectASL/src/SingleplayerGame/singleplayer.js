@@ -46,6 +46,7 @@ const fingers = {
 
 // --- PLAYER STATE ---
 let player;
+let usernameInput;
 
 // HUD style constants
 let HUD;
@@ -76,6 +77,10 @@ function setup() {
     maxHealth: 50,
     coins: 0         // UI only for now
   };
+  usernameInput = createInput(player.name);
+  usernameInput.position(width / 2 - 100, height / 2 - 40);
+  usernameInput.size(200);
+  usernameInput.hide
   // HUD style constants
   HUD = {
     x: 30,
@@ -128,10 +133,10 @@ function draw() {
   drawSpaceBackground();
   // Update button visibility based on state
   if (currentState === "menu") {
-    buttons.forEach(btn => btn.visible = ["Start Game", "Exit", "Arduino"].includes(btn.label));
+    // buttons.forEach(btn => btn.visible = ["Start Game", "Exit", "Arduino"].includes(btn.label));
     drawMenu();
   } else if (currentState === "arduino") {
-    buttons.forEach(btn => btn.visible = ["Connect", "Disconnect", "Back"].includes(btn.label));
+    // buttons.forEach(btn => btn.visible = ["Connect", "Disconnect", "Save Username", "Back"].includes(btn.label));
     drawArduinoPage();
   } else if (currentState === "countdown") {
     drawCountdown();
@@ -140,8 +145,12 @@ function draw() {
   } else if (currentState === "checkpoint") {
     drawCheckpoint();
   } else if (currentState === "gameover") {
-    buttons.forEach(btn => btn.visible = ["Restart", "Main Menu"].includes(btn.label));
+    // buttons.forEach(btn => btn.visible = ["Restart", "Main Menu"].includes(btn.label));
     drawGameOver();
+  }
+
+  if (currentState !== "arduino" && usernameInput) {
+    usernameInput.hide();
   }
 }
 
@@ -166,6 +175,7 @@ function drawCountdown() {
 // ---------------- GAME ----------------
 
 function drawMenu() {
+  buttons.forEach(btn => btn.visible = false);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
@@ -174,8 +184,11 @@ function drawMenu() {
   drawHUD(); //Remove later
 
   // Show
-  buttons.filter(btn => btn.label === "Start Game" || btn.label === "Exit" || btn.label === "Arduino")
-    .forEach(btn => btn.show());
+  buttons.filter(btn => ["Start Game", "Exit", "Arduino"].includes(btn.label))
+    .forEach(btn => {
+      btn.visible = true;  // Make them clickable
+      btn.show();          // Draw them
+    });
 
   // Arduino status bottom-right
   textAlign(RIGHT, BOTTOM);
@@ -264,6 +277,7 @@ function drawGame() {
 // ---------------- GAME OVER ----------------
 
 function drawGameOver() {
+  buttons.forEach(btn => btn.visible = false);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
@@ -277,9 +291,8 @@ function drawGameOver() {
   drawHUD();
 
   // Show
-  buttons.filter(btn => btn.label === "Restart" ||
-    btn.label === "Main Menu")
-    .forEach(btn => btn.show());
+  buttons.filter(btn => ["Restart", "Main Menu"].includes(btn.label))
+    .forEach(btn => { btn.visible = true; btn.show(); });
 }
 
 // ---------------- BUTTON CLASS ----------------
@@ -310,19 +323,27 @@ class Button {
       mouseY > this.y && mouseY < this.y + this.h;
   }
 
+
   click() {
-    if (this.isHovered()) this.callback();
+    if (this.visible && this.isHovered()) {
+      this.callback();
+    }
   }
 }
 
 
 // ---------------- MOUSE CLICK ----------------
 
+function getVisibleButtons() {
+  return buttons.filter(btn => btn.visible);
+}
+
+
 function mousePressed() {
-  for (let btn of buttons) {
-    if (btn.visible && btn.isHovered()) {
+  for (let btn of getVisibleButtons()) {
+    if (btn.isHovered()) {
       btn.click();
-      return; // Stop after first button
+      return;
     }
   }
 }
@@ -390,7 +411,7 @@ async function gotClassification(results) {
 
 
 function modelLoaded() {
-  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Start Game", () => startCountdown()));
+  buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Start Game", () => startCountdown()));
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Exit", () => window.location.href = "../index.html"));
 
   // Add restart button for game over
@@ -405,14 +426,39 @@ function modelLoaded() {
   }));
 
 
-  buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Arduino", () => {
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Arduino", () => {
     currentState = "arduino";
   }));
 
 
 
+  buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Save Username", async () => {
+    player.name = usernameInput.value();
+    console.log("Username saved:", player.name);
 
-  buttons.push(new Button(width / 2 - 220, height / 2 + 120, 200, 60, "Connect", () => {
+    // Send updated name to Arduino if connected
+    if (arduinoConnected && arduinoPort && arduinoPort.writable) {
+      try {
+        const writer = arduinoPort.writable.getWriter();
+        // Keep avg speed or send 0 if none yet
+        let avgLetterSpeed = 0;
+        if (wordSpeeds.length > 0) {
+          let sum = wordSpeeds.reduce((a, b) => a + b, 0);
+          avgLetterSpeed = (sum / wordSpeeds.length) / 1000;
+        }
+        const message = `${player.name},${avgLetterSpeed.toFixed(2)}\n`;
+        await writer.write(new TextEncoder().encode(message));
+        console.log("Updated Arduino with new name:", message);
+        writer.releaseLock();
+      } catch (err) {
+        console.error("Error sending updated name to Arduino:", err);
+      }
+    }
+  }));
+
+
+
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Connect", () => {
     console.log("Attempting Arduino connection...");
     arduinoMessage = "Connecting...";
     if ("serial" in navigator) {
@@ -431,7 +477,7 @@ function modelLoaded() {
         .then(async () => {
           arduinoConnected = true;
           arduinoMessage = "Connected!";
-          currentState = "menu";
+          currentState = "arduino";
 
           // Compute current average letter speed (or 0 if none yet)
           let avgLetterSpeed = 0;
@@ -454,6 +500,11 @@ function modelLoaded() {
           }
         }).catch(err => {
           arduinoConnected = false;
+
+          player.name = "Player" + floor(random(1000, 9999));
+          usernameInput.value(player.name);
+          usernameInput.hide();
+
           arduinoMessage = "Connection failed or wrong device.";
           console.error(err);
 
@@ -469,9 +520,20 @@ function modelLoaded() {
 
 
 
-  buttons.push(new Button(width / 2 + 20, height / 2 + 120, 200, 60, "Disconnect", async () => {
+
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Disconnect", async () => {
     if (arduinoPort) {
       try {
+        // Send disconnect message before closing
+        player.name = "Player" + floor(random(1000, 9999));
+        if (arduinoPort.writable) {
+          const writer = arduinoPort.writable.getWriter();
+          const message = `${player.name},0.00\n`; // or any format your Arduino expects
+          await writer.write(new TextEncoder().encode(message));
+          console.log("Sent disconnect message to Arduino:", message);
+          writer.releaseLock();
+        }
+
         // Cancel any active reader
         if (arduinoPort.readable) {
           const reader = arduinoPort.readable.getReader();
@@ -479,20 +541,15 @@ function modelLoaded() {
           reader.releaseLock();
         }
 
-        // Cancel any active writer
-        if (arduinoPort.writable) {
-          const writer = arduinoPort.writable.getWriter();
-          await writer.close();
-          writer.releaseLock();
-        }
-
         // Close the port
         await arduinoPort.close();
 
         // Update state
         arduinoConnected = false;
+        usernameInput.value(player.name);
+        usernameInput.hide();
         arduinoMessage = "Disconnected!";
-        currentState = "menu";
+        currentState = "arduino";
         arduinoPort = null;
         console.log("Arduino disconnected successfully.");
       } catch (err) {
@@ -502,8 +559,6 @@ function modelLoaded() {
     } else {
       arduinoMessage = "No device connected.";
     }
-
-
   }));
 
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Back", () => {
@@ -532,17 +587,27 @@ function modelLoaded() {
 }
 
 
+
 function drawArduinoPage() {
+  buttons.forEach(btn => btn.visible = false);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
   text("Arduino Setup", width / 2, height / 2 - 150);
-
   textSize(32);
   text(arduinoMessage, width / 2, height / 2);
 
-  buttons.filter(btn => btn.label === "Connect" || btn.label === "Disconnect" || btn.label === "Back")
-    .forEach(btn => btn.show());
+
+  if (arduinoConnected) {
+    usernameInput.show();
+    usernameInput.position(width / 2 - 100, height / 2 - 80);
+    buttons.filter(btn => ["Disconnect", "Save Username", "Back"].includes(btn.label))
+      .forEach(btn => { btn.visible = true; btn.show(); });
+  } else {
+    usernameInput.hide();
+    buttons.filter(btn => ["Connect", "Back"].includes(btn.label))
+      .forEach(btn => { btn.visible = true; btn.show(); });
+  }
 }
 
 
@@ -791,6 +856,7 @@ function drawHUD() {
 
 
 function drawCheckpoint() {
+  buttons.forEach(btn => btn.visible = false);
   background(0);
   textAlign(CENTER, CENTER);
   fill(255);
@@ -804,11 +870,8 @@ function drawCheckpoint() {
   drawHUD();
 
   // Show only Pay and Proceed buttons
-  buttons.forEach(btn => btn.visible = false);
-  buttons.filter(btn => btn.label === "Pay" || btn.label === "Proceed without Pay")
-    .forEach(btn => btn.visible = true);
-  buttons.filter(btn => btn.label === "Pay" || btn.label === "Proceed without Pay")
-    .forEach(btn => btn.show());
+  buttons.filter(btn => ["Pay", "Proceed without Pay"].includes(btn.label))
+    .forEach(btn => { btn.visible = true; btn.show(); });
 }
 
 

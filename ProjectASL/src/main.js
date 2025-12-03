@@ -328,7 +328,7 @@ function drawSinglePlayerInstructions() {
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(28);
-  text("\nTBD", width / 2, height / 2 - 100);
+  text("\nSurvive by collecting coins. \n\n For each minute, you have to pay a fee. \n\n Failure to do so will make you lose HP.", width / 2, height / 2 - 100);
   drawButtons();
 }
 

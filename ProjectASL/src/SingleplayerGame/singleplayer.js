@@ -157,6 +157,9 @@ function draw() {
 
 // ---------------- COUNTDOWN ----------------
 function drawCountdown() {
+  buttons.forEach(btn => {
+    btn.visible = false;  // Make them clickable
+  });
   let elapsed = millis() - countdownStartTime;
   let remaining = 3 - floor(elapsed / 1000);
 
@@ -175,7 +178,9 @@ function drawCountdown() {
 // ---------------- GAME ----------------
 
 function drawMenu() {
-  buttons.forEach(btn => btn.visible = false);
+  buttons.forEach(btn => {
+    btn.visible = false;  // Make them clickable
+  });
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
@@ -198,7 +203,9 @@ function drawMenu() {
 }
 
 function drawGame() {
-
+  buttons.forEach(btn => {
+    btn.visible = false;  // Make them clickable
+  });
   if (hands.length > 0) {
     drawHandSkeleton(hands[0], fingers);
   }
@@ -277,7 +284,9 @@ function drawGame() {
 // ---------------- GAME OVER ----------------
 
 function drawGameOver() {
-  buttons.forEach(btn => btn.visible = false);
+  buttons.forEach(btn => {
+    btn.visible = false;  // Make them clickable
+  });
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
@@ -589,7 +598,9 @@ function modelLoaded() {
 
 
 function drawArduinoPage() {
-  buttons.forEach(btn => btn.visible = false);
+  buttons.forEach(btn => {
+    btn.visible = false;  // Make them clickable
+  });
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
@@ -619,41 +630,67 @@ function startCountdown() {
 }
 
 
+
+
+
 async function endGame() {
   currentState = "gameover";
 
-  if (wordSpeeds.length > 0) {
-    let maxAvg = Math.max(...wordSpeeds);
-    console.log(`Highest average signing speed: ${(maxAvg / 1000).toFixed(2)} s`);
-  } else {
-    console.log('No words completed, no speed data available.');
+  // Normalize name: trim & ensure not empty
+  const normalizedName = String(player.name ?? "").trim();
+  if (!normalizedName) {
+    console.warn("No player name; skipping DB write.");
+    return;
   }
-  letterSpeeds = [];
-  wordSpeeds = [];
-  letterStartTime = 0;
 
-  // Prepare data
   const gameData = {
-    PlayerName: player.name,
+    PlayerName: normalizedName,
     Miles: playerScore,
     Coins: player.coins,
-    // HealthRemaining: player.health,
-    // CheckpointsReached: checkpointsReached,
-    // Timestamp: new Date().toISOString()
   };
 
-  // Insert into Supabase
-
-
   if (navigator.onLine) {
-    const { data, error } = await supabaseClient
-      .from('ASL-DataBase') // your table name
-      .insert([gameData]);
+    try {
+      // 1) Check if a record with this PlayerName exists (exact match, case-sensitive)
+      const { data: existing, error: selectError } = await supabaseClient
+        .from('ASL-DataBase')
+        .select('PlayerName')
+        .eq('PlayerName', normalizedName)
+        .limit(1); // defensive: at most one row
 
-    if (error) {
-      console.error('Error inserting game data:', error);
-    } else {
-      console.log('Game data inserted:', data);
+      if (selectError) {
+        console.error('Error checking username:', selectError);
+        return;
+      }
+
+      if (existing && existing.length > 0) {
+        // 2) Update matched record; chain .select() to see returned row
+        const { data, error } = await supabaseClient
+          .from('ASL-DataBase')
+          .update(gameData)
+          .eq('PlayerName', normalizedName)
+          .select();
+
+        if (error) {
+          console.error('Error updating game data:', error);
+        } else {
+          console.log('Game data updated:', data);
+        }
+      } else {
+        // 3) Insert new record; chain .select() to confirm what was inserted
+        const { data, error } = await supabaseClient
+          .from('ASL-DataBase')
+          .insert([gameData])
+          .select();
+
+        if (error) {
+          console.error('Error inserting game data:', error);
+        } else {
+          console.log('Game data inserted:', data);
+        }
+      }
+    } catch (err) {
+      console.error('Unexpected error:', err);
     }
   } else {
     console.warn("Offline.");
@@ -856,7 +893,9 @@ function drawHUD() {
 
 
 function drawCheckpoint() {
-  buttons.forEach(btn => btn.visible = false);
+  buttons.forEach(btn => {
+    btn.visible = false;  // Make them clickable
+  });
   background(0);
   textAlign(CENTER, CENTER);
   fill(255);

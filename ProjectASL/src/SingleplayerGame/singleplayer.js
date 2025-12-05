@@ -10,6 +10,7 @@ let lastMatchTime = 0;
 let connections;
 let arduinoConnected = false;
 let arduinoMessage = "";
+let arduinoMessageTime = 0;
 let arduinoPort = null; // Track the port globally
 
 // Game states
@@ -18,6 +19,9 @@ let countdownStartTime = null;
 let startTime = null;
 let gameDuration = 60000; // 1 minute
 let playerScore = 0;
+let coinsPaid = 0;
+let pausedTime = 0; // total time paused
+let checkpointStartTime = 0;
 
 //Checkpoints
 let checkpointsReached = 0;
@@ -52,6 +56,14 @@ let usernameInput;
 let HUD;
 
 
+//Decoration
+let shipX = -100; // start off-screen
+let shipY = 100;  // vertical position
+let shipSpeed = 5;
+let lastShipSpawn = 0;
+let shipVisible = false;
+
+
 let supabaseClient;
 
 async function initSupabase() {
@@ -78,9 +90,22 @@ function setup() {
     coins: 0         // UI only for now
   };
   usernameInput = createInput(player.name);
-  usernameInput.position(width / 2 - 100, height / 2 - 40);
-  usernameInput.size(200);
-  usernameInput.hide
+  usernameInput.position((width - usernameInput.width) / 2 - 7, height / 2 - 80);
+  usernameInput.size(230);
+  usernameInput.hide;
+
+
+  // Add styling for Arduino page input
+  usernameInput.style('font-size', '20px');
+  usernameInput.style('padding', '5px');
+  usernameInput.style('border', '2px solid cyan');
+  usernameInput.style('border-radius', '8px');
+  usernameInput.style('background-color', '#111');
+  usernameInput.style('color', '#0ff');
+  usernameInput.style('text-align', 'center');
+  usernameInput.style('outline', 'none'); // Removes default focus outline
+  usernameInput.hide();
+
   // HUD style constants
   HUD = {
     x: 30,
@@ -152,6 +177,12 @@ function draw() {
   if (currentState !== "arduino" && usernameInput) {
     usernameInput.hide();
   }
+
+  // Arduino status bottom-right
+  textAlign(RIGHT, BOTTOM);
+  textSize(20);
+  fill(arduinoConnected ? "lime" : "red");
+  text(arduinoConnected ? "Arduino Connected" : "Arduino Disconnected", width - 20, height - 20);
 }
 
 
@@ -194,12 +225,6 @@ function drawMenu() {
       btn.visible = true;  // Make them clickable
       btn.show();          // Draw them
     });
-
-  // Arduino status bottom-right
-  textAlign(RIGHT, BOTTOM);
-  textSize(20);
-  fill(arduinoConnected ? "lime" : "red");
-  text(arduinoConnected ? "Arduino Connected" : "Arduino Disconnected", width - 20, height - 20);
 }
 
 function drawGame() {
@@ -215,13 +240,14 @@ function drawGame() {
   drawHUD();
 
   // Endless checkpoint logic
-  let elapsed = millis() - startTime;
+  let elapsed = millis() - startTime - pausedTime;
 
   if (!nextCheckpointTime) nextCheckpointTime = startTime + checkpointInterval;
 
   if (millis() >= nextCheckpointTime) {
     currentState = "checkpoint";
     checkpointsReached++;
+    checkpointStartTime = millis(); // mark when checkpoint started
     nextCheckpointTime += checkpointInterval;
     return;
   }
@@ -279,6 +305,46 @@ function drawGame() {
   textSize(32);
   fill(255);
   text(timerText, boxCenterX - 280, boxCenterY - 120);
+
+
+
+
+
+  let now = millis();
+  if (now - lastShipSpawn > 10000) { // every 10 seconds
+    shipX = -100; // reset to left
+    shipVisible = true;
+    lastShipSpawn = now;
+  }
+
+  if (shipVisible) {
+    shipX += shipSpeed;
+
+    // Ship body
+    fill(50, 150, 255); // main color
+    rect(shipX, shipY, 80, 30, 8); // rounded body
+
+    // Cockpit
+    fill(200, 255, 255);
+    ellipse(shipX + 20, shipY + 15, 20, 15);
+
+    // Wings
+    fill(100, 180, 255);
+    triangle(shipX + 10, shipY - 10, shipX + 40, shipY, shipX + 10, shipY + 10); // top wing
+    triangle(shipX + 10, shipY + 30, shipX + 40, shipY + 30, shipX + 10, shipY + 40); // bottom wing
+
+    // Tail fins
+    fill(80, 130, 255);
+    rect(shipX - 5, shipY + 5, 15, 20);
+
+    // Exhaust flames
+    fill(random(200, 255), random(100, 200), 0);
+    triangle(shipX - 20, shipY + 10, shipX - 5, shipY + 5, shipX - 5, shipY + 25);
+
+    // Hide when off-screen
+    if (shipX > width + 100) shipVisible = false;
+  }
+
 }
 
 // ---------------- GAME OVER ----------------
@@ -442,14 +508,25 @@ function modelLoaded() {
 
 
   buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Save Username", async () => {
-    player.name = usernameInput.value();
+
+    let newName = usernameInput.value().trim();
+
+    if (newName.length > 10) {
+      arduinoMessage = "Username too long! Max 10 characters.";
+      arduinoMessageTime = millis();
+      console.log(arduinoMessage);
+      return; // Stop execution
+    }
+
+    player.name = newName;
+    arduinoMessage = "Username saved!";
+    arduinoMessageTime = millis();
     console.log("Username saved:", player.name);
 
     // Send updated name to Arduino if connected
     if (arduinoConnected && arduinoPort && arduinoPort.writable) {
       try {
         const writer = arduinoPort.writable.getWriter();
-        // Keep avg speed or send 0 if none yet
         let avgLetterSpeed = 0;
         if (wordSpeeds.length > 0) {
           let sum = wordSpeeds.reduce((a, b) => a + b, 0);
@@ -486,6 +563,7 @@ function modelLoaded() {
         .then(async () => {
           arduinoConnected = true;
           arduinoMessage = "Connected!";
+          arduinoMessageTime = millis();
           currentState = "arduino";
 
           // Compute current average letter speed (or 0 if none yet)
@@ -507,6 +585,7 @@ function modelLoaded() {
               console.error("Error sending initial data to Arduino:", err);
             }
           }
+          listenToArduino(); //Listen for button presses
         }).catch(err => {
           arduinoConnected = false;
 
@@ -515,6 +594,7 @@ function modelLoaded() {
           usernameInput.hide();
 
           arduinoMessage = "Connection failed or wrong device.";
+          arduinoMessageTime = millis();
           console.error(err);
 
         });
@@ -523,6 +603,7 @@ function modelLoaded() {
 
     } else {
       arduinoMessage = "Web Serial not supported.";
+      arduinoMessageTime = millis();
     }
   }));
 
@@ -558,12 +639,14 @@ function modelLoaded() {
         usernameInput.value(player.name);
         usernameInput.hide();
         arduinoMessage = "Disconnected!";
+        arduinoMessageTime = millis();
         currentState = "arduino";
         arduinoPort = null;
         console.log("Arduino disconnected successfully.");
       } catch (err) {
         console.error("Error disconnecting:", err);
         arduinoMessage = "Error disconnecting.";
+        arduinoMessageTime = millis();
       }
     } else {
       arduinoMessage = "No device connected.";
@@ -577,41 +660,34 @@ function modelLoaded() {
 
 
 
-  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 240, 60, "Pay", () => {
-    let requiredCoins = 5 + (checkpointsReached - 1) * 2;
-    if (player.coins >= requiredCoins) {
-      player.coins -= requiredCoins;
-      resetWord();
-      currentState = "game"; // Safe because HP isn't affected
-    } else {
-      applyPenalty(); // Handles gameover or continue
-    }
-  }));
-
-
-
-  buttons.push(new Button(width / 2 - 100, height / 2 + 200, 240, 60, "Proceed without Pay", () => {
-    applyPenalty();
+  buttons.push(new Button(width / 2 - 120, height / 2 + 120, 240, 60, "Pay 1 Coin", () => {
+    payCoinLogic();
   }));
 }
 
 
 
 function drawArduinoPage() {
-  buttons.forEach(btn => {
-    btn.visible = false;  // Make them clickable
-  });
+
+  buttons.forEach(btn => { btn.visible = false; });
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
   text("Arduino Setup", width / 2, height / 2 - 150);
-  textSize(32);
-  text(arduinoMessage, width / 2, height / 2);
 
+  // Show message only if within 5 seconds
+  if (arduinoMessage && millis() - arduinoMessageTime < 5000) {
+    textSize(32);
+    text(arduinoMessage, width / 2, height / 2);
+  }
 
   if (arduinoConnected) {
     usernameInput.show();
-    usernameInput.position(width / 2 - 100, height / 2 - 80);
+    usernameInput.position((width - usernameInput.width) / 2 - 7, height / 2 - 80);
+    textSize(24);
+    fill(200);
+    text("Enter your username", width / 2, height / 2 - 100);
+    usernameInput.style('box-shadow', '0 0 15px cyan');
     buttons.filter(btn => ["Disconnect", "Save Username", "Back"].includes(btn.label))
       .forEach(btn => { btn.visible = true; btn.show(); });
   } else {
@@ -892,25 +968,36 @@ function drawHUD() {
 
 
 
+
 function drawCheckpoint() {
-  buttons.forEach(btn => {
-    btn.visible = false;  // Make them clickable
-  });
+  buttons.forEach(btn => { btn.visible = false; });
   background(0);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(48);
   text(`Checkpoint ${checkpointsReached}`, width / 2, height / 2 - 150);
 
-  textSize(32);
   let requiredCoins = 5 + (checkpointsReached - 1) * 2;
+  textSize(32);
   text(`Need ${requiredCoins} coins to proceed safely`, width / 2, height / 2 - 60);
+
+  // Show progress
+  textSize(28);
+  fill(200, 255, 200);
+  text(`Paid: ${coinsPaid}/${requiredCoins}`, width / 2, height / 2 + 20);
 
   drawHUD();
 
-  // Show only Pay and Proceed buttons
-  buttons.filter(btn => ["Pay", "Proceed without Pay"].includes(btn.label))
-    .forEach(btn => { btn.visible = true; btn.show(); });
+  // If Arduino connected, show message instead of button
+  if (arduinoConnected) {
+    textSize(24);
+    fill(255, 200, 0);
+    text("Press the button on your Arduino board to pay", width / 2 - 140, height / 2 + 100);
+  } else {
+    // Show Pay button if Arduino is NOT connected
+    buttons.filter(btn => ["Pay 1 Coin"].includes(btn.label))
+      .forEach(btn => { btn.visible = true; btn.show(); });
+  }
 }
 
 
@@ -929,4 +1016,47 @@ function resetWord() {
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
   letterStartTime = millis(); // Start timing first letter
+}
+
+async function listenToArduino() {
+  if (arduinoPort && arduinoPort.readable) {
+    const reader = arduinoPort.readable.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const message = decoder.decode(value).trim();
+        console.log("Arduino says:", message);
+
+        // If button pressed and we're at checkpoint
+        if (message.includes("Button Pressed!") && currentState === "checkpoint") {
+          payCoinLogic(); // Call same logic as Pay button
+        }
+      }
+    } catch (err) {
+      console.error("Error reading from Arduino:", err);
+    } finally {
+      reader.releaseLock();
+    }
+  }
+}
+
+function payCoinLogic() {
+  let requiredCoins = 5 + (checkpointsReached - 1) * 2;
+  if (player.coins > 0) {
+    player.coins -= 1;
+    coinsPaid += 1;
+    console.log(`Paid 1 coin. Total paid: ${coinsPaid}/${requiredCoins}`);
+    if (coinsPaid >= requiredCoins) {
+      coinsPaid = 0; // reset for next checkpoint
+      pausedTime += millis() - checkpointStartTime;
+      resetWord();
+      currentState = "game"; // move on
+    }
+  } else {
+    pausedTime += millis() - checkpointStartTime;
+    console.log("No coins left! Applying penalty...");
+    applyPenalty();
+  }
 }

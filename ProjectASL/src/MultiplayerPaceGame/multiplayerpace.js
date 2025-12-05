@@ -1,4 +1,4 @@
-// ---------------- GLOBAL STATE ----------------
+// --------------------- GLOBAL STATE ---------------------
 let video, handPose, hands = [];
 let classifier;
 let classification = "???";
@@ -25,10 +25,9 @@ let clientId = `client_${Math.random().toString(16).slice(2)}`;
 let errorMessage = "";
 let errorTimer = 0;
 const HEARTBEAT_INTERVAL = 10000; // 10s
-const PLAYER_TIMEOUT = 60000; // Increased to 60s
+const PLAYER_TIMEOUT = 60000; // 60s
 let lastMatchTime = 0;
 let gameState = "waiting";
-
 const fingers = {
   thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
   index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
@@ -37,18 +36,22 @@ const fingers = {
   pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
 };
 
+// --- NEW: Username input + info message ---
+let usernameInput;    // input box for username in menu
+let infoMessage = ""; // green success/info text
+let infoTimer = 0;
 
-// ---------------- PRELOAD ----------------
+// --------------------- PRELOAD ---------------------
 function preload() {
   handPose = ml5.handPose({ flipped: true });
   words = loadStrings("../lib/words_alpha.txt");
 }
 
-
-
-// ---------------- SETUP ----------------
+// --------------------- SETUP ---------------------
 function setup() {
   createCanvas(800, 600);
+
+  // Room code input
   roomInput = createInput('');
   roomInput.attribute('placeholder', 'Enter Code');
   roomInput.hide();
@@ -62,10 +65,29 @@ function setup() {
   roomInput.style('background-color', '#f9f9f9');
   roomInput.style('box-sizing', 'border-box');
   roomInput.style('width', '250px');
+
+  // --- NEW: Username input (same style as roomInput) ---
+  usernameInput = createInput('');
+  usernameInput.attribute('placeholder', 'Enter Username');
+  usernameInput.hide();
+  usernameInput.style('padding', '10px');
+  usernameInput.style('font-size', '18px');
+  usernameInput.style('border', '2px solid #ccc');
+  usernameInput.style('border-radius', '8px');
+  usernameInput.style('outline', 'none');
+  usernameInput.style('color', '#333');
+  usernameInput.style('background-color', '#f9f9f9');
+  usernameInput.style('box-sizing', 'border-box');
+  usernameInput.style('width', '250px');
+
+  // Default randomized player name
   playerName = "Player" + floor(random(1000, 9999));
+  usernameInput.value(playerName); // prefill
+
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
+
   ml5.setBackend("webgl");
   classifier = ml5.neuralNetwork({ task: "classification" });
   classifier.load({
@@ -73,38 +95,33 @@ function setup() {
     metadata: "../ml5Model/model_meta.json",
     weights: "../ml5Model/model.weights.bin",
   }, modelLoaded);
+
   handPose.detectStart(video, gotHands);
   connections = handPose.getConnections();
+
   setupMQTT();
+
   currentWord = random(words).toUpperCase();
   currentIndex = 0;
+
   setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
   setInterval(cleanInactivePlayers, HEARTBEAT_INTERVAL);
 }
 
-
-
-// ---------------- MQTT SETUP ----------------
-
+// --------------------- MQTT SETUP ---------------------
 function setupMQTT() {
   client = mqtt.connect(brokerUrl, { clean: true });
   client.on("connect", () => console.log("Connected to MQTT broker"));
   client.on("message", handleMQTTMessage);
 }
 
-
-
-
-
 function handleMQTTMessage(topic, message) {
   try {
     const data = JSON.parse(message.toString());
-
     if (topic.endsWith("/players/update")) {
       const { playerId, name, score, ready, left, timestamp } = data;
       if (!playerId || !name) return;
       players[playerId] = { name, score, ready, left: !!left, lastUpdate: timestamp };
-
     } else if (topic.endsWith("/players")) {
       const snapshot = JSON.parse(message.toString());
       const cleanSnapshot = {};
@@ -122,14 +139,11 @@ function handleMQTTMessage(topic, message) {
       }
       players = cleanSnapshot; // Replace instead of merge
       redraw(); // Force UI refresh
-
     } else if (topic.endsWith("/start")) {
       restartGame(); // All clients restart together
-
     } else if (topic.endsWith("/ping")) {
       const { playerId, timestamp } = data;
       if (players[playerId]) players[playerId].lastUpdate = timestamp;
-
     } else if (topic.endsWith("/state")) {
       const { state } = data;
       gameState = state;
@@ -139,8 +153,6 @@ function handleMQTTMessage(topic, message) {
   }
 }
 
-
-
 function sendHeartbeat() {
   if (!roomId || !playerId || currentState === "menu") return; // Prevent sending in menu
   client.publish(`game/rooms/${roomId}/ping`, JSON.stringify({
@@ -149,23 +161,15 @@ function sendHeartbeat() {
   }));
 }
 
-
-
-
-
-
-
 function cleanInactivePlayers() {
   const now = Date.now();
   let removed = false;
-
   for (let id in players) {
     if (now - players[id].lastUpdate > PLAYER_TIMEOUT) {
       delete players[id];
       removed = true;
     }
   }
-
   if (removed) {
     publishPlayers(); // Always publish clean snapshot
     if (Object.keys(players).length === 0 && client && roomId) {
@@ -175,27 +179,25 @@ function cleanInactivePlayers() {
   }
 }
 
-
-
-
-
-
 async function joinRoom(id) {
   if (!id) return;
-
-
   players = {};
   roomId = id;
+
+  // Keep only Main Menu button; hide it in room.
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
+
   currentState = "room";
   roomInput.hide();
+  usernameInput.hide(); // NEW: hide username input in room state
+
   client.subscribe(`game/rooms/${roomId}/#`);
   client.subscribe(`game/rooms/${roomId}/state`);
 
   await new Promise(resolve => setTimeout(resolve, 500));
 
-  if (gameState !== "waiting") { // Block joining if not in lobby
+  if (gameState !== "waiting") {
     errorMessage = "Game is in progress";
     errorTimer = millis();
     currentState = "menu";
@@ -215,25 +217,21 @@ async function joinRoom(id) {
   publishPlayers();
 }
 
-
-
-
 function createRoom() {
   roomId = "room" + getRandomLetterAndNumber();
   players = {};
+
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
+
   currentState = "room";
   roomInput.hide();
+  usernameInput.hide(); // NEW: hide username input in room state
+
   client.subscribe(`game/rooms/${roomId}/#`);
   playerId = addPlayer(playerName);
   publishPlayers();
 }
-
-
-
-
-
 
 function addPlayer(name) {
   const id = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -247,9 +245,6 @@ function addPlayer(name) {
   }));
   return id;
 }
-
-
-
 
 function publishPlayers() {
   const cleanPlayers = {};
@@ -268,16 +263,48 @@ function publishPlayers() {
   client.publish(`game/rooms/${roomId}/players`, JSON.stringify(cleanPlayers), { retain: true });
 }
 
+// --- NEW: Save & validate username, propagate if in a room ---
+function saveUsername() {
+  const newName = usernameInput.value().trim();
 
+  // Validation: 3–16 chars, letters/numbers/_ only
+  const valid = /^[A-Za-z0-9_]{3,10}$/.test(newName);
+  if (!valid) {
+    errorMessage = "Username must be 3–10 chars (letters, numbers, or _)";
+    errorTimer = millis();
+    return;
+  }
 
+  // Apply locally
+  playerName = newName;
 
+  // If already in a room, propagate the change over MQTT
+  if (roomId && playerId && players[playerId]) {
+    players[playerId].name = newName;
+
+    // publish an update for this player
+    client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
+      playerId,
+      name: newName,
+      score: players[playerId].score || 0,
+      ready: !!players[playerId].ready,
+      left: !!players[playerId].left,
+      timestamp: Date.now()
+    }));
+
+    // publish full snapshot so everyone refreshes
+    publishPlayers();
+  }
+
+  // Show a brief confirmation in menu
+  infoMessage = "Username saved!";
+  infoTimer = millis();
+}
 
 function setReady() {
   if (!playerId || !players[playerId]) return;
-
   players[playerId].ready = !players[playerId].ready;
   readyButton.label = players[playerId].ready ? "Unready" : "Ready";
-
   client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
     playerId,
     name: players[playerId].name,
@@ -289,16 +316,12 @@ function setReady() {
   publishPlayers();
 
   const activePlayers = Object.values(players).filter(p => !p.left);
-
   if (gameState === "waiting" || gameState === "gameover") {
     if (activePlayers.length > 0 && activePlayers.every(p => p.ready)) {
       client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
     }
   }
 }
-
-
-
 
 function getRandomLetterAndNumber() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -309,7 +332,7 @@ function getRandomLetterAndNumber() {
   return "-" + result;
 }
 
-// ---------------- DRAW ----------------
+// --------------------- DRAW ---------------------
 function draw() {
   drawSpaceBackground(); // Black background with stars
   if (currentState === "menu") drawMenu();
@@ -320,41 +343,75 @@ function draw() {
   drawPlayerCount();
 }
 
-
-
-// ---------------- MENU ----------------
-
+// --------------------- MENU ---------------------
 function drawMenu() {
-  drawSpaceBackground()
+  drawSpaceBackground();
 
+  // Error (red) for 3s
   if (errorMessage && millis() - errorTimer < 3000) {
     fill(255, 0, 0);
     textSize(20);
-    text(errorMessage, width / 2, height / 2 - 100);
+    text(errorMessage, width / 2, height / 2 - 140);
+  }
+
+  // Info (green) for 2s
+  if (infoMessage && millis() - infoTimer < 2000) {
+    fill(0, 200, 0);
+    textSize(20);
+    text(infoMessage, width / 2, height / 2 - 140);
   }
 
   textAlign(CENTER, CENTER);
   textSize(36);
   fill(255);
-  text("ASL Multiplayer Lobby", width / 2, height / 2 - 150);
+  text("ASL Multiplayer Lobby", width / 2, height / 2 - 180);
 
+  // Panel
   fill(50, 50, 50, 180);
-  rect(width / 2 - 160, height / 2 - 80, 320, 180, 15);
+  rect(width / 2 - 160, height / 2 - 120, 320, 290, 15);
 
-  // Display username above input field
+  // Username label + input positioning
   textSize(20);
   fill(200);
-  text(`Your Username: ${playerName}`, width / 2, height / 2 - 55);
+  text("Username", width / 2, height / 2 - 95);
 
-  roomInput.position(width / 2 - 125, height / 2 - 40);
+  usernameInput.position(width / 2 - 125, height / 2 - 80);
+  usernameInput.size(250);
+  usernameInput.show();
+
+  // Save Username button
+  if (!buttons.find(b => b.label === "Save Username")) {
+    buttons.push(new Button(
+      width / 2 - 100,
+      height / 2 - 30,
+      200,
+      40,
+      "Save Username",
+      saveUsername
+    ));
+  }
+
+  // Room Code label + input
+  textSize(20);
+  fill(200);
+  text("Room Code", width / 2, height / 2 + 30);
+
+  roomInput.position(width / 2 - 125, height / 2 + 45);
   roomInput.size(250);
   roomInput.show();
 
-
   // Join Room button
   if (!buttons.find(b => b.label === "Join Room")) {
-    buttons.push(new Button(width / 2 - 155, height / 2 + 20, 150, 50, "Join Room", () => {
+    buttons.push(new Button(width / 2 - 155, height / 2 + 100, 150, 50, "Join Room", () => {
       const customCode = roomInput.value().trim();
+
+      // Optional: require a valid username before joining
+      if (!/^[A-Za-z0-9_]{3,16}$/.test(playerName)) {
+        errorMessage = "Set a valid username first (3–16 chars).";
+        errorTimer = millis();
+        return;
+      }
+
       if (!customCode) {
         errorMessage = "Please enter a Room ID!";
         errorTimer = millis();
@@ -367,22 +424,23 @@ function drawMenu() {
 
   // Create Room button
   if (!buttons.find(b => b.label === "Create Room")) {
-    buttons.push(new Button(width / 2 + 5, height / 2 + 20, 150, 50, "Create Room", () => {
+    buttons.push(new Button(width / 2 + 5, height / 2 + 100, 150, 50, "Create Room", () => {
+      // Optional: require a valid username before creating
+      if (!/^[A-Za-z0-9_]{3,10}$/.test(playerName)) {
+        errorMessage = "Set a valid username first (3–10 chars).";
+        errorTimer = millis();
+        return;
+      }
       createRoom();
     }));
   }
 
+  // Draw buttons
   buttons.forEach(btn => btn.show());
 }
 
-
-
-
-
-
 function leaveRoom() {
   console.log("Leaving room...");
-
   if (playerId && players[playerId]) {
     if (currentState === "gameover") {
       players[playerId].left = true; // Mark disconnected
@@ -407,20 +465,16 @@ function leaveRoom() {
   roomId = null;
   playerId = null;
   roomInput.hide();
+
+  // Return to menu: show Main Menu button
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
-  readyButton = null;
 
+  readyButton = null;
   redraw(); // Immediate UI refresh
 }
 
-
-
-
-
-
-// ---------------- COUNTDOWN ----------------
-
+// --------------------- COUNTDOWN ---------------------
 function drawCountdown() {
   let elapsed = millis() - countdownStartTime;
   let remaining = 3 - floor(elapsed / 1000);
@@ -435,9 +489,7 @@ function drawCountdown() {
   }
 }
 
-
-
-
+// --------------------- ROOM ---------------------
 function drawRoom() {
   textAlign(CENTER, TOP);
   textSize(32);
@@ -445,8 +497,7 @@ function drawRoom() {
   text(`Code: ${roomId}`, width / 2, 50);
 
   let y = 150;
-  const activePlayers = Object.values(players); // Immediate local state
-
+  const activePlayers = Object.values(players);
   if (activePlayers.length === 0) {
     textSize(24);
     fill(255, 0, 0);
@@ -475,8 +526,6 @@ function drawRoom() {
   }
 }
 
-
-
 function drawPlayerCount() {
   if (roomId) {
     textAlign(RIGHT, TOP);
@@ -486,32 +535,39 @@ function drawPlayerCount() {
   }
 }
 
-
-// ---------------- GAME ----------------
+// --------------------- GAME ---------------------
 function drawGame() {
   if (hands.length > 0) {
     drawHandSkeleton(hands[0], fingers);
   }
+
   if (millis() - startTime >= gameDuration) {
     endGame();
     return;
   }
+
   if (hands[0]) {
     let inputData = flattenHandData();
     classifier.classify(inputData, gotClassification);
   }
+
   fill("black");
   rect(width / 2 - 350, height / 2 + 20, 700, 350, 20);
+
   let boxCenterX = width / 2;
   let boxCenterY = height / 2 + 190;
+
   textAlign(CENTER, CENTER);
   textSize(48);
+
   let spacing = 70;
   let totalWidth = (currentWord.length - 1) * spacing;
   let startX = boxCenterX - totalWidth / 2;
+
   for (let i = 0; i < currentWord.length; i++) {
     let letter = currentWord[i];
     let xPos = startX + i * spacing;
+
     if (i < currentIndex) {
       let glowStrength = abs(sin(frameCount * 0.1)) * 20;
       let glowColor = color(0, 255, 0, glowStrength);
@@ -524,6 +580,7 @@ function drawGame() {
     }
     text(letter, xPos, boxCenterY);
   }
+
   strokeWeight(0);
   let elapsed = millis() - startTime;
   let seconds = floor(elapsed / 1000);
@@ -533,6 +590,7 @@ function drawGame() {
   textSize(32);
   fill(255);
   text(timerText, boxCenterX - 280, boxCenterY - 120);
+
   textAlign(CENTER, CENTER);
   textSize(64);
   fill(0, 255, 0);
@@ -540,15 +598,13 @@ function drawGame() {
   classification = "";
 }
 
-// ---------------- GAME OVER ----------------
-
-
-
+// --------------------- GAME OVER ---------------------
 function drawGameOver() {
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
   text("Game Over!", width / 2, 80);
+
   textSize(32);
   text("Players & Scores:", width / 2, 150);
 
@@ -580,8 +636,7 @@ function drawGameOver() {
   leaveButton.show();
 }
 
-
-// ---------------- BUTTON CLASS ----------------
+// --------------------- BUTTON CLASS ---------------------
 class Button {
   constructor(x, y, w, h, label, callback) {
     this.x = x;
@@ -611,7 +666,6 @@ class Button {
   }
 }
 
-
 function mousePressed() {
   for (let btn of buttons) {
     if (btn.visible && btn.isHovered()) {
@@ -624,12 +678,10 @@ function mousePressed() {
   }
 }
 
-
-// ---------------- CALLBACKS ----------------
+// --------------------- CALLBACKS ---------------------
 function gotHands(results) {
   hands = results;
 }
-
 
 function gotClassification(results) {
   let sum = results.reduce((acc, r) => acc + r.confidence, 0);
@@ -640,7 +692,6 @@ function gotClassification(results) {
     let now = millis();
     let expectedLetter = currentWord[currentIndex];
 
-    // Check if classification matches expected letter and cooldown passed
     if (normalized[0].label === expectedLetter && now - lastMatchTime > 500) {
       currentIndex++;
       lastMatchTime = now;
@@ -660,9 +711,8 @@ function gotClassification(results) {
   }
 }
 
-
 function modelLoaded() {
-  buttons.push(new Button(width / 2 - 100, height / 2 + 150, 200, 60, "Main Menu", () => {
+  buttons.push(new Button(width / 2 - 100, height / 2 + 190, 200, 60, "Main Menu", () => {
     window.location.href = "../index.html";
   }));
 }
@@ -672,12 +722,8 @@ function startCountdown() {
   countdownStartTime = millis();
 }
 
-
-
-
 function endGame() {
   currentState = "gameover";
-
   // Reset readiness for all players
   Object.values(players).forEach(p => p.ready = false);
   publishPlayers();
@@ -689,13 +735,6 @@ function endGame() {
   // Reset Ready button label
   if (readyButton) readyButton.label = "Ready";
 }
-
-
-
-
-
-
-
 
 function restartGame() {
   currentState = "countdown";
@@ -709,13 +748,12 @@ function restartGame() {
   }
 
   playerScore = 0;
-
   Object.values(players).forEach(p => {
     p.ready = false;
     p.score = 0;
   });
-  publishPlayers();
 
+  publishPlayers();
   client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "in-progress" }), { retain: true });
   gameState = "in-progress";
 
@@ -726,16 +764,16 @@ function restartGame() {
   buttons = buttons.filter(btn => btn.label === "Main Menu");
 }
 
-
-
-// ---------------- HAND DATA ----------------
+// --------------------- HAND DATA ---------------------
 function flattenHandData() {
   if (!hands[0]) return [];
   let hand = hands[0];
+
   let xs = hand.keypoints.map(k => k.x);
   let ys = hand.keypoints.map(k => k.y);
   let minX = Math.min(...xs), maxX = Math.max(...xs);
   let minY = Math.min(...ys), maxY = Math.max(...ys);
+
   let handData = [];
   for (let i = 0; i < hand.keypoints.length; i++) {
     let keypoint = hand.keypoints[i];
@@ -743,11 +781,13 @@ function flattenHandData() {
     let normY = (keypoint.y - minY) / (maxY - minY);
     handData.push(normX, normY);
   }
+
   for (let j = 0; j < connections.length; j++) {
     let pointAIndex = connections[j][0];
     let pointBIndex = connections[j][1];
     let pointA = hand.keypoints[pointAIndex];
     let pointB = hand.keypoints[pointBIndex];
+
     let dx = (pointB.x - pointA.x) / (maxX - minX);
     let dy = (pointB.y - pointA.y) / (maxY - minY);
     let distance = Math.sqrt(dx * dx + dy * dy);

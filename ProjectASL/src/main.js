@@ -105,7 +105,6 @@ async function setup() {
   // After loading finishes, switch to menu
   currentPage = "menu";
   setupMenuButtons();
-  noCursor();
 }
 
 
@@ -129,7 +128,6 @@ function draw() {
     // Replaces video background
     drawTitle();
     if (hands.length > 0) {
-      drawHandSkeleton(hands[0], fingers);
       userIsOnline();
       drawButtons();
     } else {
@@ -170,6 +168,7 @@ function draw() {
   }
 
   if (hands.length > 0) handleHandInteraction(0, 0, video.width, video.height);
+  if (hands.length > 0) drawHandSkeleton(hands[0], fingers);
 
   if (isFading) {
     fadeAlpha = min(fadeAlpha + 10, 255);

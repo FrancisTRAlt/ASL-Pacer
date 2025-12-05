@@ -6,15 +6,19 @@ let confidence = 0;
 let lastClassifyTime = 0;
 const classifyInterval = 200; // ms
 let lastMatchTime = 0;
+let isClassifying = false;   // prevent overlapping classify calls
+let finalizing = false;      // guard against double finalization
 
 let connections;
 let arduinoConnected = false;
 let arduinoMessage = "";
 let arduinoMessageTime = 0;
 let arduinoPort = null; // Track the port globally
+let arduinoReader = null;      // track the active reader globally
+let stopArduinoRead = false;   // signal to stop the read loop
 
 // Game states
-let currentState = "menu"; // "menu", "countdown", "game", "gameover"
+let currentState = "menu"; // "menu", "countdown", "checkpoint", "game", "gameover"
 let countdownStartTime = null;
 let startTime = null;
 let gameDuration = 60000; // 1 minute
@@ -26,7 +30,7 @@ let checkpointStartTime = 0;
 //Checkpoints
 let checkpointsReached = 0;
 let checkpointInterval = 60000; // 1 minute
-let nextCheckpointTime = null;
+let nextCheckpointElapsed = null
 
 // Word game state
 let words = [];
@@ -143,8 +147,9 @@ function setup() {
   connections = handPose.getConnections();
 
   // Initialize first word
-  currentWord = random(words).toUpperCase();
+  currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
+  letterStartTime = millis();  // start timing the first letter
 
   if (navigator.onLine) {
     initSupabase();
@@ -231,35 +236,51 @@ function drawGame() {
   buttons.forEach(btn => {
     btn.visible = false;  // Make them clickable
   });
+
+  // --- Fallback: if all letters are complete but finalization didn't run, run it here
+  if (currentIndex >= currentWord.length) {
+    finalizeWord();
+  }
+
   if (hands.length > 0) {
     drawHandSkeleton(hands[0], fingers);
   }
 
 
+
   // HUD
   drawHUD();
 
-  // Endless checkpoint logic
+  // --- Endless checkpoint logic driven by elapsed game time ---
   let elapsed = millis() - startTime - pausedTime;
 
-  if (!nextCheckpointTime) nextCheckpointTime = startTime + checkpointInterval;
+  // Initialize the first checkpoint threshold to 1 minute of elapsed time
+  if (!nextCheckpointElapsed) nextCheckpointElapsed = checkpointInterval; // 60000
 
-  if (millis() >= nextCheckpointTime) {
+  // Trigger when the elapsed game time crosses the threshold
+  if (elapsed >= nextCheckpointElapsed) {
     currentState = "checkpoint";
     checkpointsReached++;
-    checkpointStartTime = millis(); // mark when checkpoint started
-    nextCheckpointTime += checkpointInterval;
+    checkpointStartTime = millis();      // record *absolute* start to accumulate pausedTime later
+    nextCheckpointElapsed += checkpointInterval; // schedule next at +1 min of elapsed time
     return;
   }
 
-  // Classification logic
 
+  // Classification logic with overlap guard
   if (hands[0]) {
-    let now = millis();
-    if (now - lastClassifyTime > classifyInterval) {
-      let inputData = flattenHandData();
-      classifier.classify(inputData, gotClassification);
+    const now = millis();
+    if (!isClassifying && (now - lastClassifyTime > classifyInterval)) {
+      const inputData = flattenHandData();
+      isClassifying = true;
       lastClassifyTime = now;
+      classifier.classify(inputData, (results) => {
+        try {
+          gotClassification(results);
+        } finally {
+          isClassifying = false;
+        }
+      });
     }
   }
 
@@ -429,56 +450,46 @@ function gotHands(results) {
   hands = results;
 }
 
+
 async function gotClassification(results) {
-  let sum = results.reduce((acc, r) => acc + r.confidence, 0);
-  let normalized = results.map(r => ({ label: r.label, confidence: r.confidence / sum }));
-  normalized.sort((a, b) => b.confidence - a.confidence);
+  // Guard: empty or invalid results
+  if (!results || results.length === 0) return;
 
-  if (normalized[0].confidence >= 0.6) {
-    let now = millis();
-    let expectedLetter = currentWord[currentIndex];
-    if (normalized[0].label === expectedLetter && now - lastMatchTime > 500) {
+  const sum = results.reduce((acc, r) => acc + (r?.confidence ?? 0), 0);
+  if (!isFinite(sum) || sum <= 0) return; // nothing meaningful to use
+
+  const normalized = results
+    .map(r => ({ label: r.label, confidence: (r.confidence || 0) / sum }))
+    .sort((a, b) => b.confidence - a.confidence);
+
+  const top = normalized[0];
+  if (!top || !isFinite(top.confidence)) return;
+
+  // Require confidence threshold
+  if (top.confidence >= 0.6) {
+    const now = millis();
+
+    // If word already complete (race condition), finalize immediately
+    if (currentIndex >= currentWord.length) {
+      finalizeWord();
+      return;
+    }
+
+    const expectedLetter = currentWord[currentIndex];
+    // If your model returns lowercase, you can compare case-insensitively:
+    // if ((top.label || '').toUpperCase() === expectedLetter)
+    if (top.label === expectedLetter && (now - lastMatchTime > 500)) {
+      // Accept this letter
       currentIndex++;
-      lastMatchTime = now;
-
-      let timeTaken = now - letterStartTime;
+      const timeTaken = now - letterStartTime;
       letterSpeeds.push(timeTaken);
       console.log(`Letter signed in ${(timeTaken / 1000).toFixed(2)} s`);
-      letterStartTime = now; // Reset for next letter
+      letterStartTime = now; // start timing the next letter
+      lastMatchTime = now;
 
+      // If that was the last letter, finalize the word right now
       if (currentIndex >= currentWord.length) {
-
-        let sum = letterSpeeds.reduce((a, b) => a + b, 0);
-        let avg = sum / letterSpeeds.length;
-        wordSpeeds.push(avg);
-        console.log(`Average word signing speed: ${(avg / 1000).toFixed(2)} s`);
-        letterSpeeds = [];
-        playerScore++;
-
-        // Update Arduino with new average speed
-        if (arduinoConnected && arduinoPort && arduinoPort.writable) {
-          try {
-            const writer = arduinoPort.writable.getWriter();
-            let total = wordSpeeds.reduce((a, b) => a + b, 0);
-            let avgLetterSpeed = (total / wordSpeeds.length) / 1000; // ms to s
-            const message = `${player.name},${avgLetterSpeed.toFixed(2)}\n`;
-            await writer.write(new TextEncoder().encode(message));
-            console.log("Updated Arduino:", message);
-            writer.releaseLock();
-          } catch (err) {
-            console.error("Error updating Arduino:", err);
-          }
-        }
-
-        // Reward coins based on word length
-        if (currentWord.length <= 4) {
-          player.coins += 1; // small word
-        } else {
-          player.coins += 2; // big word
-        }
-
-        currentWord = random(words).toUpperCase();
-        currentIndex = 0;
+        finalizeWord();
       }
     }
   }
@@ -496,7 +507,7 @@ function modelLoaded() {
     playerScore = 0;
     player.health = player.maxHealth; // Reset HP
     player.coins = 0;                 // Reset coins
-    currentWord = random(words).toUpperCase();
+    currentWord = random(words).toUpperCase().replace(/\s+/g, '');
     currentIndex = 0;
   }));
 
@@ -608,48 +619,60 @@ function modelLoaded() {
   }));
 
 
-
-
-
   buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Disconnect", async () => {
-    if (arduinoPort) {
-      try {
-        // Send disconnect message before closing
-        player.name = "Player" + floor(random(1000, 9999));
-        if (arduinoPort.writable) {
-          const writer = arduinoPort.writable.getWriter();
-          const message = `${player.name},0.00\n`; // or any format your Arduino expects
-          await writer.write(new TextEncoder().encode(message));
-          console.log("Sent disconnect message to Arduino:", message);
-          writer.releaseLock();
-        }
-
-        // Cancel any active reader
-        if (arduinoPort.readable) {
-          const reader = arduinoPort.readable.getReader();
-          await reader.cancel();
-          reader.releaseLock();
-        }
-
-        // Close the port
-        await arduinoPort.close();
-
-        // Update state
-        arduinoConnected = false;
-        usernameInput.value(player.name);
-        usernameInput.hide();
-        arduinoMessage = "Disconnected!";
-        arduinoMessageTime = millis();
-        currentState = "arduino";
-        arduinoPort = null;
-        console.log("Arduino disconnected successfully.");
-      } catch (err) {
-        console.error("Error disconnecting:", err);
-        arduinoMessage = "Error disconnecting.";
-        arduinoMessageTime = millis();
-      }
-    } else {
+    if (!arduinoPort) {
       arduinoMessage = "No device connected.";
+      arduinoMessageTime = millis();
+      return;
+    }
+
+    try {
+      // 1) Send a friendly goodbye (optional)
+      if (arduinoPort.writable) {
+        const writer = arduinoPort.writable.getWriter();
+        const message = `${player.name},0.00\n`;
+        await writer.write(new TextEncoder().encode(message));
+        writer.releaseLock();
+      }
+
+      // 2) Stop the read loop and cancel the *same* reader
+      stopArduinoRead = true;
+      if (arduinoReader) {
+        try {
+          await arduinoReader.cancel();            // causes read() to resolve with done=true
+        } catch (e) {
+          // Some browsers throw when canceling an already-stalled reader; safe to ignore
+          console.debug("Reader cancel:", e?.message ?? e);
+        }
+        try { arduinoReader.releaseLock(); } catch { }
+        arduinoReader = null;
+      }
+
+      // 3) Now close the port
+      await arduinoPort.close();
+
+      // 4) Reset state/UI
+      arduinoConnected = false;
+      arduinoPort = null;
+      arduinoMessage = "Disconnected!";
+      arduinoMessageTime = millis();
+      currentState = "arduino";
+      console.log("Arduino disconnected successfully.");
+
+    } catch (err) {
+      // Common messages: "NetworkError when attempting to fetch resource."
+      // or "InvalidStateError: Cannot close a locked port." if reader wasn’t released
+      console.error("Error disconnecting:", err);
+      arduinoMessage = `Error disconnecting: ${err?.message ?? err}`;
+      arduinoMessageTime = millis();
+
+      // Fallback: ensure state isn’t stuck
+      try {
+        if (arduinoPort) await arduinoPort.close();
+      } catch { }
+      arduinoConnected = false;
+      arduinoPort = null;
+      arduinoReader = null;
     }
   }));
 
@@ -702,7 +725,7 @@ function startCountdown() {
   currentState = "countdown";
   countdownStartTime = millis();
   checkpointsReached = 0;
-  nextCheckpointTime = null; // will set after game starts
+  nextCheckpointElapsed = null
 }
 
 
@@ -778,7 +801,7 @@ function restartGame() {
   playerScore = 0;
   player.health = player.maxHealth; // Reset HP
   player.coins = 0;                 // Reset coins
-  currentWord = random(words).toUpperCase();
+  currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
   startCountdown();
 }
@@ -909,11 +932,24 @@ function drawHUD() {
   fill(HUD.bgColor);
   rect(HUD.x, HUD.y, 480, HUD.height + 50, 10);
 
-  // --- Player Name ---
-  fill(HUD.nameColor);
+  // --- Player "icon" (cyan) + name ---
+  const nameY = HUD.y + HUD.height / 2 + 4;
+
+  // Draw a simple cyan person icon (head + body)
+  push();
+  fill('cyan');
+  noStroke();
+  // head
+  ellipse(HUD.x + 18, nameY - 4, 14, 14);
+  // body (rounded rectangle)
+  rect(HUD.x + 12, nameY + 3, 12, 10, 3);
+  pop();
+
+  // Draw name (white)
+  fill(255);
   textAlign(LEFT, CENTER);
   textSize(20);
-  text(`👤 ${player.name}`, HUD.x + 10, HUD.y + HUD.height / 2 + 4);
+  text(player.name, HUD.x + 36, nameY);
 
   // --- Health Bar ---
   const barX = HUD.x + 10;
@@ -930,18 +966,16 @@ function drawHUD() {
 
   // Bar color (green → yellow → red)
   const healthColor = lerpColor(
-    color(255, 0, 0),    // red
-    color(255, 255, 0),  // yellow
+    color(255, 0, 0),       // red
+    color(255, 255, 0),     // yellow
     frac < 0.5 ? frac * 2 : 1
   );
   const healthColor2 = lerpColor(
-    color(255, 255, 0),  // yellow
-    color(0, 200, 0),    // green
+    color(255, 255, 0),     // yellow
+    color(0, 200, 0),       // green
     frac < 0.5 ? 0 : (frac - 0.5) * 2
   );
-  // blend across two ranges
   const blended = frac < 0.5 ? healthColor : healthColor2;
-
   fill(blended);
   rect(barX, barY, barW * frac, barH, 6);
 
@@ -959,7 +993,6 @@ function drawHUD() {
   // --- Coins ---
   const coinTextX = HUD.x + barW + 30;
   const coinTextY = HUD.y + HUD.height + HUD.spacing + barH / 2;
-
   fill(HUD.coinColor);
   textSize(18);
   textAlign(LEFT, CENTER);
@@ -992,7 +1025,7 @@ function drawCheckpoint() {
   if (arduinoConnected) {
     textSize(24);
     fill(255, 200, 0);
-    text("Press the button on your Arduino board to pay", width / 2 - 140, height / 2 + 100);
+    text("Press the button on your Arduino to pay", width / 2 - 210, height / 2 + 100);
   } else {
     // Show Pay button if Arduino is NOT connected
     buttons.filter(btn => ["Pay 1 Coin"].includes(btn.label))
@@ -1001,8 +1034,8 @@ function drawCheckpoint() {
 }
 
 
-function applyPenalty() {
-  let damage = checkpointsReached * (player.coins + 1); // base damage even if coins = 0
+function applyPenalty(coinDebt) {
+  let damage = checkpointsReached * (coinDebt); // Cal based on the current checkpoint and the user's debt on that checkpoint
   player.health -= damage;
   if (player.health <= 0) {
     endGame();
@@ -1013,31 +1046,91 @@ function applyPenalty() {
 }
 
 function resetWord() {
-  currentWord = random(words).toUpperCase();
+  currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
   letterStartTime = millis(); // Start timing first letter
 }
 
+
+function finalizeWord() {
+  if (finalizing) return;      // guard against multiple triggers in same frame
+  finalizing = true;
+
+  // Compute and store average letter speed safely
+  const sum = letterSpeeds.reduce((a, b) => a + b, 0);
+  const count = Math.max(letterSpeeds.length, 1);
+  const avg = sum / count;
+
+  if (isFinite(avg)) {
+    wordSpeeds.push(avg);
+    console.log(`Average word signing speed: ${(avg / 1000).toFixed(2)} s`);
+  } else {
+    console.warn('Average speed was not finite; skipped storing.', { sum, count });
+  }
+
+  // Reset per-word stats
+  letterSpeeds = [];
+  playerScore++;
+
+  // Reward coins based on word length (same logic you had)
+  player.coins += currentWord.length <= 4 ? 1 : 2;
+
+  // Send update to Arduino (safe try/catch)
+  if (arduinoConnected && arduinoPort && arduinoPort.writable) {
+    try {
+      const writer = arduinoPort.writable.getWriter();
+      const total = wordSpeeds.reduce((a, b) => a + b, 0);
+      const avgLetterSpeed = (total / wordSpeeds.length) / 1000; // ms -> s
+      const message = `${player.name},${avgLetterSpeed.toFixed(2)}\n`;
+      writer.write(new TextEncoder().encode(message));
+      console.log("Updated Arduino:", message);
+      writer.releaseLock();
+    } catch (err) {
+      console.error("Error updating Arduino:", err);
+    }
+  }
+
+  // Advance to a brand-new word and reset timing
+  resetWord(); // sets currentWord/currentIndex and letterStartTime
+  finalizing = false;
+}
+
+
+
 async function listenToArduino() {
   if (arduinoPort && arduinoPort.readable) {
+    stopArduinoRead = false;                     // allow reading
     const reader = arduinoPort.readable.getReader();
+    arduinoReader = reader;                      // keep a reference
     const decoder = new TextDecoder();
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const message = decoder.decode(value).trim();
-        console.log("Arduino says:", message);
+    let buffer = "";
 
-        // If button pressed and we're at checkpoint
-        if (message.includes("Button Pressed!") && currentState === "checkpoint") {
-          payCoinLogic(); // Call same logic as Pay button
+    try {
+      while (!stopArduinoRead) {
+        const { value, done } = await reader.read();
+        if (done) break; // reader.cancel() will cause done=true
+        buffer += decoder.decode(value);
+
+        // Process complete lines
+        let nl;
+        while ((nl = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+
+          console.log("Arduino says:", line);
+          if (currentState === "checkpoint" && line.includes("BUTTON PRESSED!")) {
+            payCoinLogic();
+          }
         }
       }
     } catch (err) {
-      console.error("Error reading from Arduino:", err);
+      // This often fires as "NetworkError: The device has been lost."
+      // or "DOMException: ReadableStream" when cancelling—safe to ignore.
+      console.warn("Reader loop ended:", err?.message ?? err);
     } finally {
-      reader.releaseLock();
+      try { reader.releaseLock(); } catch { }
+      arduinoReader = null; // clear reference
     }
   }
 }
@@ -1057,6 +1150,6 @@ function payCoinLogic() {
   } else {
     pausedTime += millis() - checkpointStartTime;
     console.log("No coins left! Applying penalty...");
-    applyPenalty();
+    applyPenalty(requiredCoins - coinsPaid);
   }
 }

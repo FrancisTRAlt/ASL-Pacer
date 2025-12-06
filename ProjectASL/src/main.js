@@ -3,10 +3,18 @@ let video, handPose, hands = [];
 // UI elements and state
 let buttons = [];
 let currentPage = "cameraCheck";
+const backgroundColor = "#0066dbff";
 // Gesture interaction state
 let lastPinch = false;
 let lastPinchTime = 0;
 const pinchCooldown = 1000;
+const fingers = {
+  thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
+  index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
+  middle: ["middle_finger_mcp", "middle_finger_pip", "middle_finger_dip", "middle_finger_tip"],
+  ring: ["ring_finger_mcp", "ring_finger_pip", "ring_finger_dip", "ring_finger_tip"],
+  pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
+};
 // Cursor animation properties
 let cursorRotation = 0;
 let cursorScale = 1;
@@ -18,56 +26,18 @@ let targetProgress = 0;
 // Fade transition state
 let isFading = false;
 let fadeAlpha = 0;
-
-const backgroundColor = "#0066dbff";
-
-const fingers = {
-  thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
-  index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
-  middle: ["middle_finger_mcp", "middle_finger_pip", "middle_finger_dip", "middle_finger_tip"],
-  ring: ["ring_finger_mcp", "ring_finger_pip", "ring_finger_dip", "ring_finger_tip"],
-  pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
-};
-
-
-// Dummy leaderboard data
+// leaderboard data
 let aslLeaderboardData = [];
-let supabaseClient;
-
-// Sort function
-function sortLeaderboard(data) {
-  return data.sort((a, b) => b.score - a.score);
-}
-
-async function loadConfigAndInitSupabase() {
-  const response = await fetch('config.json'); // Path to your JSON file
-  const config = await response.json();
-
-  supabaseClient = supabase.createClient(config.supabase.url, config.supabase.anonKey);
-
-  console.log('Supabase initialized');
-}
+let supabaseClient = null;
 
 
-async function fetchLeaderboard() {
-  const { data, error } = await supabaseClient
-    .from('ASL-DataBase')
-    .select('*')
-    .order('Miles', { ascending: false });
-
-  if (error) {
-    console.error('Error fetching leaderboard:', error);
-    return [];
-  }
-  return data;
-}
 
 
 // ---------------- SETUP ----------------
-
 async function setup() {
   createCanvas(800, 600);
-  await loadConfigAndInitSupabase()
+  // Setup leeaderboard
+  await loadConfigAndInitSupabase();
   aslLeaderboardData = await fetchLeaderboard();
 
   // Start loading
@@ -76,11 +46,12 @@ async function setup() {
   targetProgress = 0;
   currentPage = "loading";
 
-  // Create video
+  // Create video for hand gesture
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
 
+  // Loading Screen
   // Wait for video metadata
   await new Promise(resolve => {
     video.elt.onloadedmetadata = () => {
@@ -88,7 +59,6 @@ async function setup() {
       resolve();
     };
   });
-
   // Initialize handPose and wait for model load
   await new Promise(resolve => {
     handPose = ml5.handPose({ flipped: true }, () => {
@@ -97,7 +67,7 @@ async function setup() {
     });
   });
 
-  // Start detection
+  // Start detection for handpose
   handPose.detectStart(video, results => {
     hands = results;
   });
@@ -108,8 +78,10 @@ async function setup() {
 }
 
 
+
 // ---------------- DRAW ----------------
 function draw() {
+  // Loading Screen
   if (isLoading && currentPage !== "cameraCheck") {
     // Smooth progress animation
     progress = lerp(progress, targetProgress, 0.05);
@@ -123,11 +95,12 @@ function draw() {
     return; // Stop here until loading is done
   }
 
+  // If anywhere but not in the camercheck state
   if (currentPage !== "cameraCheck") {
     drawSpaceBackground();
-    // Replaces video background
     drawTitle();
-    if (hands.length > 0) {
+
+    if (hands.length > 0) { // Hand detection
       userIsOnline();
       drawButtons();
     } else {
@@ -139,16 +112,17 @@ function draw() {
     }
   }
 
+  // Hand detection (Note that we start from the menu. If we click "Start Game", show these options)
   if (hands.length > 0) {
-    if (currentPage === "singlePlayerInstruc") {
+    if (currentPage === "singlePlayerInstruc") { // ASL Survival
       drawSinglePlayerInstructions();
-    } else if (currentPage === "MultiASLInstruc") {
+    } else if (currentPage === "MultiASLInstruc") { // ASL Pacer (Multiplayer)
       drawMultiASLInstructions();
-    } else if (currentPage === "aslLeaderboard") {
+    } else if (currentPage === "aslLeaderboard") { // Leaderboard in the ASL survival
       drawASLLeaderboard();
-    } else if (currentPage === "credits") {
+    } else if (currentPage === "credits") { // Credits
       fill(0);
-      rect(width / 4, height / 4 - 50, width / 2, 170, 20); // Rounded c
+      rect(width / 4, height / 4 - 50, width / 2, 170, 20);
 
       // Title
       textSize(48);
@@ -167,9 +141,11 @@ function draw() {
     }
   }
 
+  // Show the hand and its pinch function
   if (hands.length > 0) handleHandInteraction(0, 0, video.width, video.height);
   if (hands.length > 0) drawHandSkeleton(hands[0], fingers);
 
+  // Fade transition to a different page
   if (isFading) {
     fadeAlpha = min(fadeAlpha + 10, 255);
     fill(0, fadeAlpha);
@@ -178,6 +154,8 @@ function draw() {
 }
 
 
+
+// ---------------- MENU BACKGROUND ----------------
 function drawSpaceBackground() {
   background(0); // Black space
   noStroke();
@@ -203,6 +181,8 @@ function drawSpaceBackground() {
   }
 }
 
+
+
 // ---------------- LOADING SCREEN ----------------
 function drawLoadingScreen() {
   drawSpaceBackground();
@@ -222,6 +202,8 @@ function drawLoadingScreen() {
   textSize(20);
   text(`${progress.toFixed(1)}%`, width / 2, barY + barHeight + 25);
 }
+
+
 
 // ---------------- TITLE ----------------
 function drawTitle() {
@@ -249,13 +231,19 @@ function drawTitle() {
 }
 
 
+
 // ---------------- BUTTONS ----------------
-function drawButtons() {
+function createButtonObj(label, x, y, w, h, action) {
+  return { label, x, y, w, h, hidden: false, action };
+}
+
+function drawButtons() { // Draw ALL buttons based on it is visible status
   buttons.forEach(btn => {
     if (!btn.hidden) drawButton(btn);
   });
 }
-function drawButton(btn) {
+
+function drawButton(btn) { // Button blueprint
   fill(0, 150);
   rect(btn.x, btn.y, btn.w, btn.h, 10);
   fill(255);
@@ -263,7 +251,8 @@ function drawButton(btn) {
   textSize(24);
   text(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
 }
-function highlightButton(btn) {
+
+function highlightButton(btn) { // When the button is highlighted
   fill(255, 255, 0);
   rect(btn.x, btn.y, btn.w, btn.h, 10);
   fill(0);
@@ -272,14 +261,15 @@ function highlightButton(btn) {
   text(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
 }
 
-// ---------------- BUTTON SETUP ----------------
-// ---------------- MENU ----------------
+// ---------------- BUTTON SETUP IN RESPECTIVE PLACE ----------------
+// ---------------- MENU
 function setupMenuButtons() {
   buttons = [
     createButtonObj("Start Game", width / 2 - 100, height / 2 - 100, 200, 80, () => showGameOptions()),
     createButtonObj("Credits", width / 2 - 100, height / 2, 200, 80, () => showCredits())
   ];
 }
+
 function showCredits() {
   currentPage = "credits";
   buttons = [
@@ -288,19 +278,19 @@ function showCredits() {
 }
 
 
-// ---------------- MENU Part 2 ----------------
+// ---------------- MENU (After Start Game)
 function showGameOptions() {
   currentPage = "gameOptions";
   buttons = [
-    createButtonObj("ASL Survival", width / 2 - 220, height / 2 - 100, 200, 80, () => { showSinglePlayerInstruc(); }),
-    createButtonObj("ASL Pacer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiASLInstruc(); }),
+    createButtonObj("Singleplayer", width / 2 - 220, height / 2 - 100, 200, 80, () => { showSinglePlayerInstruc(); }),
+    createButtonObj("Multiplayer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiASLInstruc(); }),
     createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => { currentPage = "menu"; setupMenuButtons(); })
   ];
 }
 
 
-// ---------------- SINGLEPLAYER ----------------
-function showSinglePlayerInstruc() {
+// ---------------- SINGLEPLAYER (ASL Survival)
+function showSinglePlayerInstruc() { // Buttons shown
   currentPage = "singlePlayerInstruc";
   buttons = [
     createButtonObj("Play", width / 2 - 220, height / 2 + 70, 200, 80, () => {
@@ -321,7 +311,7 @@ function showSinglePlayerInstruc() {
   ];
 }
 
-function drawSinglePlayerInstructions() {
+function drawSinglePlayerInstructions() { //Instruction shown
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20);
   textAlign(CENTER, CENTER);
@@ -331,16 +321,19 @@ function drawSinglePlayerInstructions() {
   drawButtons();
 }
 
-// ---------------- MULTIPLAYER ASL Marathon MENU ----------------
-function showMultiASLInstruc() {
+
+// ---------------- MULTIPLAYER (ASL Pacer)
+function showMultiASLInstruc() { // Button shown
   currentPage = "MultiASLInstruc";
   buttons = [
     createButtonObj("Play", width / 2 - 220, height / 2 + 70, 200, 80, () => {
-      isFading = true;
-      fadeAlpha = 0;
-      setTimeout(() => {
-        window.location.href = "/MultiplayerPaceGame/multiplayerpace.html";
-      }, 800);
+      if (userIsOnline()) {
+        isFading = true;
+        fadeAlpha = 0;
+        setTimeout(() => {
+          window.location.href = "/MultiplayerPaceGame/multiplayerpace.html";
+        }, 800);
+      }
     }),
     createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {
       currentPage = "gameOptions";
@@ -349,27 +342,49 @@ function showMultiASLInstruc() {
   ];
 }
 
-function drawMultiASLInstructions() {
+function drawMultiASLInstructions() { // Instructions shown
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(28);
-  text("\nYou have 60 seconds to spell as many words\n as you can in ASL.\n\n You can play by yourself or with friends.", width / 2, height / 2 - 100);
+  text("\nYou have 60 seconds to spell as many words\n as you can in ASL against others.\n\n Internet is required.", width / 2, height / 2 - 100);
   drawButtons();
 }
 
 
+
 // ---------------- LEADERBOARDS ----------------
-function showASLLeaderboard() {
+async function loadConfigAndInitSupabase() { // Load Supabase
+  const response = await fetch('config.json'); // Path to your API KEYS
+  const config = await response.json();
+
+  supabaseClient = supabase.createClient(config.supabase.url, config.supabase.anonKey);
+
+  console.log('Supabase initialized');
+}
+
+async function fetchLeaderboard() { // Query the Leaderboard
+  const { data, error } = await supabaseClient
+    .from('ASL-DataBase')
+    .select('*')
+    .order('Miles', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching leaderboard:', error);
+    return [];
+  }
+  return data;
+}
+
+function showASLLeaderboard() { // Show the buttons in the leaderboard page
   currentPage = "aslLeaderboard";
   buttons = [
     createButtonObj("Back", width / 2 - 100, height - 100, 200, 60, () => { showSinglePlayerInstruc(); })
   ];
 }
 
-
-function drawASLLeaderboard() {
+function drawASLLeaderboard() { // Show the data of the leaderboard
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 220, 600, 410, 20);
   textAlign(CENTER, CENTER);
@@ -380,9 +395,8 @@ function drawASLLeaderboard() {
   textSize(15);
   let startY = height / 2 - 140;
 
-  // Sort by Miles (or Coins if you prefer)
-  const sortedData = [...aslLeaderboardData].sort((a, b) => b.Miles - a.Miles).slice(0, 10);
-
+  // Sort by Miles
+  const sortedData = [...aslLeaderboardData].sort((a, b) => b.Miles - a.Miles).slice(0, 10); // Sort from top to bottom
   sortedData.forEach((player, index) => {
     if (index === 0) {
       let pulse = map(sin(frameCount * 0.1), -1, 1, 180, 255);
@@ -403,11 +417,7 @@ function drawASLLeaderboard() {
 
 
 // ---------------- UTILITIES ----------------
-function createButtonObj(label, x, y, w, h, action) {
-  return { label, x, y, w, h, hidden: false, action };
-}
-
-async function checkCameraAccess() {
+async function checkCameraAccess() { // See if the camera is on
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true });
     stream.getTracks().forEach(track => track.stop());
@@ -418,8 +428,7 @@ async function checkCameraAccess() {
   }
 }
 
-
-function userIsOnline() {
+function userIsOnline() { // Is the user connected to the internet?
   let boxWidth = 150;
   let boxHeight = 40;
   let x = 20;
@@ -432,6 +441,8 @@ function userIsOnline() {
   text(status, x + boxWidth / 2, y + boxHeight / 2);
   return navigator.onLine;
 }
+
+
 
 // ---------------- HAND INTERACTION ----------------
 function handleHandInteraction(sx, sy, sw, sh) {

@@ -1,33 +1,10 @@
 // --------------------- GLOBAL STATE ---------------------
+// Hand detection
 let video, handPose, hands = [];
 let classifier;
-let classification = "???";
+let classification = "";
 let confidence = 0;
 let connections;
-let currentState = "menu";
-let countdownStartTime = null;
-let startTime = null;
-let gameDuration = 60000;
-let playerScore = 0;
-let playerName = "";
-let roomId = null;
-let playerId = null;
-let words = [];
-let currentWord = "";
-let currentIndex = 0;
-let buttons = [];
-let readyButton;
-let roomInput;
-let client;
-let players = {}; // { playerId: { name, score, ready, lastUpdate } }
-const brokerUrl = "wss://test.mosquitto.org:8081";
-let clientId = `client_${Math.random().toString(16).slice(2)}`;
-let errorMessage = "";
-let errorTimer = 0;
-const HEARTBEAT_INTERVAL = 10000; // 10s
-const PLAYER_TIMEOUT = 60000; // 60s
-let lastMatchTime = 0;
-let gameState = "waiting";
 const fingers = {
   thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
   index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
@@ -36,16 +13,57 @@ const fingers = {
   pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
 };
 
-// --- NEW: Username input + info message ---
+// Page status
+let currentState = "menu";
+
+// Game related
+let countdownStartTime = null;
+let startTime = null;
+let gameDuration = 60000;
+let playerScore = 0;
+let playerName = "";
+let words = [];
+let currentWord = "";
+let currentIndex = 0;
+
+// MQTT
+let client;
+const brokerUrl = "wss://test.mosquitto.org:8081";
+let clientId = `client_${Math.random().toString(16).slice(2)}`;
+let roomId = null; //ID of the room
+let playerId = null; //Player UNIQUE id in case of dup
+let players = {}; // { playerId: { name, score, ready, lastUpdate } }
+
+let buttons = [];
+let readyButton;
+let roomInput;
+
+const HEARTBEAT_INTERVAL = 10000; // 10s
+const PLAYER_TIMEOUT = 60000; // 60s
+
+let lastMatchTime = 0;
+let gameState = "waiting";
+
+// error display
+let errorMessage = "";
+let errorTimer = 0;
+
+// Username input + info message
 let usernameInput;    // input box for username in menu
 let infoMessage = ""; // green success/info text
 let infoTimer = 0;
+
+
+
+
 
 // --------------------- PRELOAD ---------------------
 function preload() {
   handPose = ml5.handPose({ flipped: true });
   words = loadStrings("../lib/words_alpha.txt");
 }
+
+
 
 // --------------------- SETUP ---------------------
 function setup() {
@@ -66,7 +84,7 @@ function setup() {
   roomInput.style('box-sizing', 'border-box');
   roomInput.style('width', '250px');
 
-  // --- NEW: Username input (same style as roomInput) ---
+  // Username input (same style as roomInput) ---
   usernameInput = createInput('');
   usernameInput.attribute('placeholder', 'Enter Username');
   usernameInput.hide();
@@ -88,6 +106,7 @@ function setup() {
   video.size(800, 600);
   video.hide();
 
+  // Get the ML model
   ml5.setBackend("webgl");
   classifier = ml5.neuralNetwork({ task: "classification" });
   classifier.load({
@@ -96,252 +115,56 @@ function setup() {
     weights: "../ml5Model/model.weights.bin",
   }, modelLoaded);
 
+  // Get the handpose
   handPose.detectStart(video, gotHands);
   connections = handPose.getConnections();
 
-  setupMQTT();
+  setupMQTT(); // MQTT for online connection
 
-  currentWord = random(words).toUpperCase();
+  // Other
+  currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
-
   setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
   setInterval(cleanInactivePlayers, HEARTBEAT_INTERVAL);
 }
 
-// --------------------- MQTT SETUP ---------------------
-function setupMQTT() {
-  client = mqtt.connect(brokerUrl, { clean: true });
-  client.on("connect", () => console.log("Connected to MQTT broker"));
-  client.on("message", handleMQTTMessage);
-}
 
-function handleMQTTMessage(topic, message) {
-  try {
-    const data = JSON.parse(message.toString());
-    if (topic.endsWith("/players/update")) {
-      const { playerId, name, score, ready, left, timestamp } = data;
-      if (!playerId || !name) return;
-      players[playerId] = { name, score, ready, left: !!left, lastUpdate: timestamp };
-    } else if (topic.endsWith("/players")) {
-      const snapshot = JSON.parse(message.toString());
-      const cleanSnapshot = {};
-      for (let id in snapshot) {
-        const p = snapshot[id];
-        if (p && p.name) {
-          cleanSnapshot[id] = {
-            name: p.name,
-            score: p.score || 0,
-            ready: !!p.ready,
-            left: !!p.left,
-            lastUpdate: p.lastUpdate || Date.now()
-          };
-        }
-      }
-      players = cleanSnapshot; // Replace instead of merge
-      redraw(); // Force UI refresh
-    } else if (topic.endsWith("/start")) {
-      restartGame(); // All clients restart together
-    } else if (topic.endsWith("/ping")) {
-      const { playerId, timestamp } = data;
-      if (players[playerId]) players[playerId].lastUpdate = timestamp;
-    } else if (topic.endsWith("/state")) {
-      const { state } = data;
-      gameState = state;
-    }
-  } catch (err) {
-    console.error("Invalid MQTT message:", err);
-  }
-}
-
-function sendHeartbeat() {
-  if (!roomId || !playerId || currentState === "menu") return; // Prevent sending in menu
-  client.publish(`game/rooms/${roomId}/ping`, JSON.stringify({
-    playerId,
-    timestamp: Date.now()
-  }));
-}
-
-function cleanInactivePlayers() {
-  const now = Date.now();
-  let removed = false;
-  for (let id in players) {
-    if (now - players[id].lastUpdate > PLAYER_TIMEOUT) {
-      delete players[id];
-      removed = true;
-    }
-  }
-  if (removed) {
-    publishPlayers(); // Always publish clean snapshot
-    if (Object.keys(players).length === 0 && client && roomId) {
-      client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
-      console.log(`Room ${roomId} cleared from MQTT due to inactivity`);
-    }
-  }
-}
-
-async function joinRoom(id) {
-  if (!id) return;
-  players = {};
-  roomId = id;
-
-  // Keep only Main Menu button; hide it in room.
-  buttons = buttons.filter(btn => btn.label === "Main Menu");
-  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
-
-  currentState = "room";
-  roomInput.hide();
-  usernameInput.hide(); // NEW: hide username input in room state
-
-  client.subscribe(`game/rooms/${roomId}/#`);
-  client.subscribe(`game/rooms/${roomId}/state`);
-
-  await new Promise(resolve => setTimeout(resolve, 500));
-
-  if (gameState !== "waiting") {
-    errorMessage = "Game is in progress";
-    errorTimer = millis();
-    currentState = "menu";
-    leaveRoom();
-    return;
-  }
-
-  if (Object.keys(players).length === 0) {
-    errorMessage = "Room does not exist!";
-    errorTimer = millis();
-    currentState = "menu";
-    leaveRoom();
-    return;
-  }
-
-  playerId = addPlayer(playerName);
-  publishPlayers();
-}
-
-function createRoom() {
-  roomId = "room" + getRandomLetterAndNumber();
-  players = {};
-
-  buttons = buttons.filter(btn => btn.label === "Main Menu");
-  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
-
-  currentState = "room";
-  roomInput.hide();
-  usernameInput.hide(); // NEW: hide username input in room state
-
-  client.subscribe(`game/rooms/${roomId}/#`);
-  playerId = addPlayer(playerName);
-  publishPlayers();
-}
-
-function addPlayer(name) {
-  const id = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  players[id] = { name, score: 0, ready: false, lastUpdate: Date.now() };
-  client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
-    playerId: id,
-    name,
-    score: 0,
-    ready: false,
-    timestamp: Date.now()
-  }));
-  return id;
-}
-
-function publishPlayers() {
-  const cleanPlayers = {};
-  for (let id in players) {
-    const p = players[id];
-    if (p && p.name) {
-      cleanPlayers[id] = {
-        name: p.name,
-        score: p.score || 0,
-        ready: !!p.ready,
-        left: !!p.left,
-        lastUpdate: p.lastUpdate || Date.now()
-      };
-    }
-  }
-  client.publish(`game/rooms/${roomId}/players`, JSON.stringify(cleanPlayers), { retain: true });
-}
-
-// --- NEW: Save & validate username, propagate if in a room ---
-function saveUsername() {
-  const newName = usernameInput.value().trim();
-
-  // Validation: 3–16 chars, letters/numbers/_ only
-  const valid = /^[A-Za-z0-9_]{3,10}$/.test(newName);
-  if (!valid) {
-    errorMessage = "Username must be 3–10 chars (letters, numbers, or _)";
-    errorTimer = millis();
-    return;
-  }
-
-  // Apply locally
-  playerName = newName;
-
-  // If already in a room, propagate the change over MQTT
-  if (roomId && playerId && players[playerId]) {
-    players[playerId].name = newName;
-
-    // publish an update for this player
-    client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
-      playerId,
-      name: newName,
-      score: players[playerId].score || 0,
-      ready: !!players[playerId].ready,
-      left: !!players[playerId].left,
-      timestamp: Date.now()
-    }));
-
-    // publish full snapshot so everyone refreshes
-    publishPlayers();
-  }
-
-  // Show a brief confirmation in menu
-  infoMessage = "Username saved!";
-  infoTimer = millis();
-}
-
-function setReady() {
-  if (!playerId || !players[playerId]) return;
-  players[playerId].ready = !players[playerId].ready;
-  readyButton.label = players[playerId].ready ? "Unready" : "Ready";
-  client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
-    playerId,
-    name: players[playerId].name,
-    score: players[playerId].score,
-    ready: players[playerId].ready,
-    left: !!players[playerId].left,
-    timestamp: Date.now()
-  }));
-  publishPlayers();
-
-  const activePlayers = Object.values(players).filter(p => !p.left);
-  if (gameState === "waiting" || gameState === "gameover") {
-    if (activePlayers.length > 0 && activePlayers.every(p => p.ready)) {
-      client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
-    }
-  }
-}
-
-function getRandomLetterAndNumber() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let result = '';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return "-" + result;
-}
 
 // --------------------- DRAW ---------------------
 function draw() {
   drawSpaceBackground(); // Black background with stars
   if (currentState === "menu") drawMenu();
-  else if (currentState === "room") drawRoom();
+  else if (currentState === "room") drawRoom(); // Lobby
+  // Enter the Game
   else if (currentState === "countdown") drawCountdown();
   else if (currentState === "game") drawGame();
   else if (currentState === "gameover") drawGameOver();
   drawPlayerCount();
 }
+
+function drawSpaceBackground() {
+  background(0); // Black space
+  noStroke();
+  if (!drawSpaceBackground.stars) {
+    drawSpaceBackground.stars = [];
+    const numStars = 200;
+    for (let i = 0; i < numStars; i++) {
+      drawSpaceBackground.stars.push({
+        x: random(width),
+        y: random(height),
+        size: random(1, 3),
+        phase: random(TWO_PI)
+      });
+    }
+  }
+  for (let s of drawSpaceBackground.stars) {
+    let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
+    fill(255, alpha);
+    ellipse(s.x, s.y, s.size, s.size);
+  }
+}
+
+
 
 // --------------------- MENU ---------------------
 function drawMenu() {
@@ -439,55 +262,6 @@ function drawMenu() {
   buttons.forEach(btn => btn.show());
 }
 
-function leaveRoom() {
-  console.log("Leaving room...");
-  if (playerId && players[playerId]) {
-    if (currentState === "gameover") {
-      players[playerId].left = true; // Mark disconnected
-      publishPlayers();
-    } else {
-      delete players[playerId];
-      publishPlayers();
-    }
-  }
-
-  const activePlayers = Object.values(players).filter(p => !p.left);
-  if (activePlayers.length === 0 && client && roomId) {
-    client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
-    console.log(`Room ${roomId} cleared from MQTT`);
-  }
-
-  if (client && roomId) {
-    client.unsubscribe(`game/rooms/${roomId}/#`);
-  }
-
-  currentState = "menu";
-  roomId = null;
-  playerId = null;
-  roomInput.hide();
-
-  // Return to menu: show Main Menu button
-  buttons = buttons.filter(btn => btn.label === "Main Menu");
-  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
-
-  readyButton = null;
-  redraw(); // Immediate UI refresh
-}
-
-// --------------------- COUNTDOWN ---------------------
-function drawCountdown() {
-  let elapsed = millis() - countdownStartTime;
-  let remaining = 3 - floor(elapsed / 1000);
-  textAlign(CENTER, CENTER);
-  textSize(128);
-  fill(255);
-  if (remaining >= 0) {
-    text(remaining, width / 2, height / 2);
-  } else {
-    currentState = "game";
-    startTime = millis();
-  }
-}
 
 // --------------------- ROOM ---------------------
 function drawRoom() {
@@ -534,6 +308,30 @@ function drawPlayerCount() {
     text(`Players: ${Object.keys(players).length} / 5`, width - 20, 20);
   }
 }
+
+
+
+// --------------------- COUNTDOWN ---------------------
+function startCountdown() {
+  currentState = "countdown";
+  countdownStartTime = millis();
+}
+
+function drawCountdown() {
+  let elapsed = millis() - countdownStartTime;
+  let remaining = 3 - floor(elapsed / 1000);
+  textAlign(CENTER, CENTER);
+  textSize(128);
+  fill(255);
+  if (remaining >= 0) {
+    text(remaining, width / 2, height / 2);
+  } else {
+    currentState = "game";
+    startTime = millis();
+  }
+}
+
+
 
 // --------------------- GAME ---------------------
 function drawGame() {
@@ -599,6 +397,20 @@ function drawGame() {
 }
 
 // --------------------- GAME OVER ---------------------
+function endGame() {
+  currentState = "gameover";
+  // Reset readiness for all players
+  Object.values(players).forEach(p => p.ready = false);
+  publishPlayers();
+
+  // Update MQTT state to "gameover" instead of "waiting"
+  client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "gameover" }), { retain: true });
+  gameState = "gameover";
+
+  // Reset Ready button label
+  if (readyButton) readyButton.label = "Ready";
+}
+
 function drawGameOver() {
   textAlign(CENTER, CENTER);
   fill(255);
@@ -635,6 +447,308 @@ function drawGameOver() {
   }
   leaveButton.show();
 }
+
+function restartGame() {
+  currentState = "countdown";
+  countdownStartTime = millis();
+
+  // Remove disconnected players
+  for (let id in players) {
+    if (players[id].left) {
+      delete players[id];
+    }
+  }
+
+  playerScore = 0;
+  Object.values(players).forEach(p => {
+    p.ready = false;
+    p.score = 0;
+  });
+
+  publishPlayers();
+  client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "in-progress" }), { retain: true });
+  gameState = "in-progress";
+
+  currentWord = random(words).toUpperCase().replace(/\s+/g, '');
+  currentIndex = 0;
+
+  readyButton = null;
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+}
+
+
+
+// --------------------- MQTT SETUP ---------------------
+function setupMQTT() { // Connect to the broker
+  client = mqtt.connect(brokerUrl, { clean: true });
+  client.on("connect", () => console.log("Connected to MQTT broker"));
+  client.on("message", handleMQTTMessage);
+}
+
+function handleMQTTMessage(topic, message) { // This handles players if they are in the same broker
+  try {
+    const data = JSON.parse(message.toString());
+    if (topic.endsWith("/players/update")) {
+      const { playerId, name, score, ready, left, timestamp } = data;
+      if (!playerId || !name) return;
+      players[playerId] = { name, score, ready, left: !!left, lastUpdate: timestamp };
+    } else if (topic.endsWith("/players")) {
+      const snapshot = JSON.parse(message.toString());
+      const cleanSnapshot = {};
+      for (let id in snapshot) {
+        const p = snapshot[id];
+        if (p && p.name) {
+          cleanSnapshot[id] = {
+            name: p.name,
+            score: p.score || 0,
+            ready: !!p.ready,
+            left: !!p.left,
+            lastUpdate: p.lastUpdate || Date.now()
+          };
+        }
+      }
+      players = cleanSnapshot; // Replace instead of merge. We want the player name to be seperate and not updating one over the other
+      redraw(); // Force UI refresh
+
+    } else if (topic.endsWith("/start")) { // If all players want to start
+      restartGame(); // All clients restart together
+    } else if (topic.endsWith("/ping")) {
+      const { playerId, timestamp } = data;
+      if (players[playerId]) players[playerId].lastUpdate = timestamp;
+    } else if (topic.endsWith("/state")) {
+      const { state } = data;
+      gameState = state;
+    }
+  } catch (err) {
+    console.error("Invalid MQTT message:", err);
+  }
+}
+
+function sendHeartbeat() {
+  if (!roomId || !playerId || currentState === "menu") return; // Prevent sending in menu
+  client.publish(`game/rooms/${roomId}/ping`, JSON.stringify({
+    playerId,
+    timestamp: Date.now()
+  }));
+}
+
+function cleanInactivePlayers() {
+  const now = Date.now();
+  let removed = false;
+  for (let id in players) {
+    if (now - players[id].lastUpdate > PLAYER_TIMEOUT) {
+      delete players[id];
+      removed = true;
+    }
+  }
+  if (removed) {
+    publishPlayers(); // Always publish clean snapshot
+    if (Object.keys(players).length === 0 && client && roomId) {
+      client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
+      console.log(`Room ${roomId} cleared from MQTT due to inactivity`);
+    }
+  }
+}
+
+
+
+// --------------------- ROOM SETTINGS ---------------------
+async function joinRoom(id) { // Joining a room
+  if (!id) return;
+  players = {};
+  roomId = id;
+
+  // Keep only Main Menu button; hide it in room.
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
+
+  currentState = "room";
+  roomInput.hide();
+  usernameInput.hide(); // hide username input in room state
+
+  client.subscribe(`game/rooms/${roomId}/#`);
+  client.subscribe(`game/rooms/${roomId}/state`);
+
+  await new Promise(resolve => setTimeout(resolve, 500));
+
+
+  if (gameState !== "waiting") { // If the game is in progress, do not join
+    errorMessage = "Game is in progress";
+    errorTimer = millis();
+    currentState = "menu";
+    leaveRoom();
+    return;
+  }
+
+  if (Object.keys(players).length === 0) { // if the room has 0 players to start off, it does not exist
+    errorMessage = "Room does not exist!";
+    errorTimer = millis();
+    currentState = "menu";
+    leaveRoom();
+    return;
+  }
+
+  // Otherwise, join the room
+  playerId = addPlayer(playerName);
+  publishPlayers();
+}
+
+function createRoom() { // Creating your room
+  roomId = "room" + getRandomLetterAndNumber(); // Random generated room ID
+  players = {};
+
+  // Hide the main menu button
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
+
+  currentState = "room";
+  roomInput.hide();
+  usernameInput.hide(); // hide username input in room state
+
+  // We are in a room that has one player (Yourself)
+  client.subscribe(`game/rooms/${roomId}/#`);
+  playerId = addPlayer(playerName);
+  publishPlayers();
+}
+
+function leaveRoom() {
+  console.log("Leaving room...");
+  if (playerId && players[playerId]) {
+    if (currentState === "gameover") {
+      players[playerId].left = true; // Mark disconnected
+      publishPlayers();
+    } else {
+      delete players[playerId];
+      publishPlayers();
+    }
+  }
+
+  const activePlayers = Object.values(players).filter(p => !p.left);
+  if (activePlayers.length === 0 && client && roomId) {
+    client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
+    console.log(`Room ${roomId} cleared from MQTT`);
+  }
+
+  if (client && roomId) {
+    client.unsubscribe(`game/rooms/${roomId}/#`);
+  }
+
+  currentState = "menu";
+  roomId = null;
+  playerId = null;
+  roomInput.hide();
+
+  // Return to menu: show Main Menu button
+  buttons = buttons.filter(btn => btn.label === "Main Menu");
+  buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
+
+  readyButton = null;
+  redraw(); // Immediate UI refresh
+}
+
+function getRandomLetterAndNumber() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return "-" + result;
+}
+
+
+
+// --------------------- PLAYER SETTINGS ---------------------
+function addPlayer(name) { // Add the player to the room with their data
+  const id = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`; //Player ID
+  players[id] = { name, score: 0, ready: false, lastUpdate: Date.now() };
+  client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
+    playerId: id,
+    name,
+    score: 0,
+    ready: false,
+    timestamp: Date.now()
+  }));
+  return id;
+}
+
+function publishPlayers() { // Player Status shared through MQTT
+  const cleanPlayers = {};
+  for (let id in players) {
+    const p = players[id];
+    if (p && p.name) {
+      cleanPlayers[id] = {
+        name: p.name,
+        score: p.score || 0,
+        ready: !!p.ready,
+        left: !!p.left,
+        lastUpdate: p.lastUpdate || Date.now()
+      };
+    }
+  }
+  client.publish(`game/rooms/${roomId}/players`, JSON.stringify(cleanPlayers), { retain: true });
+}
+
+// Save & validate username, propagate if in a room
+function saveUsername() {
+  const newName = usernameInput.value().trim();
+
+  // Validation: 3–10 chars, letters/numbers/_ only
+  const valid = /^[A-Za-z0-9_]{3,10}$/.test(newName);
+  if (!valid) {
+    errorMessage = "Username must be 3–10 chars (letters, numbers, or _)";
+    errorTimer = millis();
+    return;
+  }
+
+  // Apply locally
+  playerName = newName;
+
+  // If already in a room, propagate the change over MQTT
+  if (roomId && playerId && players[playerId]) {
+    players[playerId].name = newName;
+
+    // publish an update for this player
+    client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
+      playerId,
+      name: newName,
+      score: players[playerId].score || 0,
+      ready: !!players[playerId].ready,
+      left: !!players[playerId].left,
+      timestamp: Date.now()
+    }));
+
+    // publish full snapshot so everyone refreshes
+    publishPlayers();
+  }
+
+  // Show a brief confirmation in menu
+  infoMessage = "Username saved!";
+  infoTimer = millis();
+}
+
+function setReady() { // set the player ready if they are ready
+  if (!playerId || !players[playerId]) return;
+  players[playerId].ready = !players[playerId].ready;
+  readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+  client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
+    playerId,
+    name: players[playerId].name,
+    score: players[playerId].score,
+    ready: players[playerId].ready,
+    left: !!players[playerId].left,
+    timestamp: Date.now()
+  }));
+  publishPlayers();
+
+  const activePlayers = Object.values(players).filter(p => !p.left);
+  if (gameState === "waiting" || gameState === "gameover") {
+    if (activePlayers.length > 0 && activePlayers.every(p => p.ready)) {
+      client.publish(`game/rooms/${roomId}/start`, JSON.stringify({ timestamp: Date.now() }));
+    }
+  }
+}
+
+
 
 // --------------------- BUTTON CLASS ---------------------
 class Button {
@@ -678,6 +792,8 @@ function mousePressed() {
   }
 }
 
+
+
 // --------------------- CALLBACKS ---------------------
 function gotHands(results) {
   hands = results;
@@ -704,65 +820,20 @@ function gotClassification(results) {
         publishPlayers();
 
         // Load next word
-        currentWord = random(words).toUpperCase();
+        currentWord = random(words).toUpperCase().replace(/\s+/g, '');
         currentIndex = 0;
       }
     }
   }
 }
 
-function modelLoaded() {
+function modelLoaded() { // Only loads in the main menu button
   buttons.push(new Button(width / 2 - 100, height / 2 + 190, 200, 60, "Main Menu", () => {
     window.location.href = "../index.html";
   }));
 }
 
-function startCountdown() {
-  currentState = "countdown";
-  countdownStartTime = millis();
-}
 
-function endGame() {
-  currentState = "gameover";
-  // Reset readiness for all players
-  Object.values(players).forEach(p => p.ready = false);
-  publishPlayers();
-
-  // Update MQTT state to "gameover" instead of "waiting"
-  client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "gameover" }), { retain: true });
-  gameState = "gameover";
-
-  // Reset Ready button label
-  if (readyButton) readyButton.label = "Ready";
-}
-
-function restartGame() {
-  currentState = "countdown";
-  countdownStartTime = millis();
-
-  // Remove disconnected players
-  for (let id in players) {
-    if (players[id].left) {
-      delete players[id];
-    }
-  }
-
-  playerScore = 0;
-  Object.values(players).forEach(p => {
-    p.ready = false;
-    p.score = 0;
-  });
-
-  publishPlayers();
-  client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "in-progress" }), { retain: true });
-  gameState = "in-progress";
-
-  currentWord = random(words).toUpperCase();
-  currentIndex = 0;
-
-  readyButton = null;
-  buttons = buttons.filter(btn => btn.label === "Main Menu");
-}
 
 // --------------------- HAND DATA ---------------------
 function flattenHandData() {
@@ -796,28 +867,6 @@ function flattenHandData() {
     handData.push(angle);
   }
   return handData;
-}
-
-function drawSpaceBackground() {
-  background(0); // Black space
-  noStroke();
-  if (!drawSpaceBackground.stars) {
-    drawSpaceBackground.stars = [];
-    const numStars = 200;
-    for (let i = 0; i < numStars; i++) {
-      drawSpaceBackground.stars.push({
-        x: random(width),
-        y: random(height),
-        size: random(1, 3),
-        phase: random(TWO_PI)
-      });
-    }
-  }
-  for (let s of drawSpaceBackground.stars) {
-    let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
-    fill(255, alpha);
-    ellipse(s.x, s.y, s.size, s.size);
-  }
 }
 
 function drawHandSkeleton(hand, fingers) {

@@ -30,12 +30,28 @@ let fadeAlpha = 0;
 let aslLeaderboardData = [];
 let supabaseClient = null;
 
+// --- MUSIC HUD ---
+let bgMusic = null; // facade provided by index.html
+const musicUI = {
+  panelW: 180,
+  panelH: 60,
+  padding: 16,
+  x: 0, y: 0,
+  btnSize: 40,
+  playRect: { x: 0, y: 0, w: 40, h: 40 },
+  muteRect: { x: 0, y: 0, w: 40, h: 40 }
+};
+// --- MUSIC URL CONTROLS (DOM on main menu) ---
+let ytUrlInput = null;
+let ytUrlLoadBtn = null;
+
 
 
 
 // ---------------- SETUP ----------------
 async function setup() {
   createCanvas(800, 600);
+  bgMusic = window.bgMusic || null;
   // Setup leeaderboard
   await loadConfigAndInitSupabase();
   aslLeaderboardData = await fetchLeaderboard();
@@ -144,6 +160,10 @@ function draw() {
   // Show the hand and its pinch function
   if (hands.length > 0) handleHandInteraction(0, 0, video.width, video.height);
   if (hands.length > 0) drawHandSkeleton(hands[0], fingers);
+
+  // DRAW MUSIC HUD
+  if (!bgMusic && window.bgMusic) bgMusic = window.bgMusic; // late-binding
+  drawMusicHUD();
 
   // Fade transition to a different page
   if (isFading) {
@@ -264,6 +284,7 @@ function highlightButton(btn) { // When the button is highlighted
 // ---------------- BUTTON SETUP IN RESPECTIVE PLACE ----------------
 // ---------------- MENU
 function setupMenuButtons() {
+  showMusicUrlControls();
   buttons = [
     createButtonObj("Start Game", width / 2 - 100, height / 2 - 100, 200, 80, () => showGameOptions()),
     createButtonObj("Credits", width / 2 - 100, height / 2, 200, 80, () => showCredits())
@@ -573,4 +594,168 @@ function drawHandSkeleton(hand, fingers) {
       if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
     }
   }
+}
+
+
+
+
+
+function parseYouTubeVideoId(url) {
+  try {
+    const u = new URL(url.trim());
+    const host = u.hostname.replace(/^www\./, '');
+    // youtu.be/<id>
+    if (host === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] || null;
+    // youtube.com/watch?v=<id>
+    if (host === 'youtube.com' || host === 'm.youtube.com') {
+      if (u.searchParams.has('v')) return u.searchParams.get('v');
+      // /embed/<id> or /shorts/<id>
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts[0] === 'embed' || parts[0] === 'shorts') return parts[1] || null;
+    }
+    return null;
+  } catch {
+    // Fallback regex for typical paste cases
+    const m = url.match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{6,})/);
+    return m ? m[1] : null;
+  }
+}
+
+function showMusicUrlControls() {
+  // Create once
+  if (!ytUrlInput) {
+    ytUrlInput = createInput('');
+    ytUrlInput.attribute('placeholder', 'Paste YouTube URL');
+    ytUrlInput.style('margin-left', '10em');
+    ytUrlInput.style('width', '200px');
+    ytUrlInput.style('padding', '10px');
+    ytUrlInput.style('border-radius', '8px');
+    ytUrlInput.style('border', '1px solid #8ab6ff');
+    ytUrlInput.style('font-size', '16px');
+  }
+  if (!ytUrlLoadBtn) {
+    ytUrlLoadBtn = createButton('Load Music');
+    ytUrlLoadBtn.style('margin-left', '8px');
+    ytUrlLoadBtn.style('padding', '11px 18px');
+    ytUrlLoadBtn.style('border-radius', '8px');
+    ytUrlLoadBtn.style('background', '#1d4ed8');
+    ytUrlLoadBtn.style('color', '#fff');
+    ytUrlLoadBtn.style('border', 'none');
+    ytUrlLoadBtn.style('font-size', '16px');
+    ytUrlLoadBtn.style('cursor', 'pointer');
+
+    ytUrlLoadBtn.mousePressed(() => {
+      const raw = ytUrlInput.value();
+      const id = parseYouTubeVideoId(raw);
+      if (!id) {
+        ytUrlLoadBtn.html('Invalid URL');
+        setTimeout(() => ytUrlLoadBtn.html('Load Music'), 2000);
+        return;
+      }
+      if (window.bgMusic?.cue) {
+        window.bgMusic.cue(id); // cue only (no play)
+        window.bgMusic.setLoopEnabled(true);
+        ytUrlLoadBtn.html('Loaded!');
+        setTimeout(() => ytUrlLoadBtn.html('Load Music'), 2500);
+      } else {
+        ytUrlLoadBtn.html('Error');
+        setTimeout(() => ytUrlLoadBtn.html('Load Music'), 2000);
+      }
+    });
+  }
+
+  // === RIGHT-SIDE POSITIONING (bottom-right) ===
+  const marginRight = 20;   // distance from right edge of the canvas
+  const marginBottom = 4;  // distance from bottom edge of the canvas
+
+  // Start with the input aligned to the right edge
+  const inputW = 360;
+  const btnW   = 120;       // visual width of button (approx)
+  const spacing = 20;
+
+  // Compute x so the input sits flush to the right margin
+  const inputX = width - marginRight - (inputW + btnW + spacing);
+  const inputY = height - marginBottom - 44; // 44 ≈ input height + a little padding
+
+  ytUrlInput.position(inputX, inputY);
+  ytUrlLoadBtn.position(inputX + inputW + spacing, inputY);
+
+  ytUrlInput.show();
+  ytUrlLoadBtn.show();
+}
+
+function destroyMusicUrlControls() {
+  if (ytUrlInput) ytUrlInput.hide();
+  if (ytUrlLoadBtn) ytUrlLoadBtn.hide();
+}
+
+function drawMusicHUD() {
+  // Show a disabled panel until the API is ready
+  const ready = bgMusic && bgMusic.ready;
+
+  const p = musicUI;
+  p.x = width - p.panelW - p.padding;
+  p.y = height - p.panelH - p.padding;
+
+  // Panel
+  noStroke();
+  fill(0, 180);
+  rect(p.x, p.y, p.panelW, p.panelH, 12);
+
+  // Compute button rects
+  //Play
+  p.playRect.x = p.x + 75;           
+  p.playRect.y = p.y - 15;
+
+  p.playRect.w = p.btnSize;          
+  p.playRect.h = p.btnSize;
+
+  //Mute
+  p.muteRect.x = p.x + 70 + p.btnSize + 16;
+  p.muteRect.y = p.y - 15;
+  p.muteRect.w = p.btnSize;
+  p.muteRect.h = p.btnSize;
+
+  // Button backgrounds
+  fill(ready ? color(255, 255, 255, 220) : color(180, 180, 180, 160));
+  rect(p.playRect.x, p.playRect.y, p.playRect.w, p.playRect.h, 8);
+  rect(p.muteRect.x, p.muteRect.y, p.muteRect.w, p.muteRect.h, 8);
+
+  // Button labels
+  fill(0);
+  textAlign(CENTER, CENTER);
+  textSize(20);
+  const playLabel = (!bgMusic || bgMusic.isPaused()) ? "▶" : "⏸";
+  const muteLabel = (!bgMusic || bgMusic.isMuted())  ? "🔇" : "🔊";
+  text(playLabel, p.playRect.x + p.playRect.w / 2, p.playRect.y + p.playRect.h / 2);
+  text(muteLabel, p.muteRect.x + p.muteRect.w / 2, p.muteRect.y + p.muteRect.h / 2);
+
+  // Hint when not ready
+  if (!ready) {
+    textSize(12);
+    fill(220);
+    textAlign(LEFT, BASELINE);
+    text("loading…", p.x + 12, p.y + p.panelH - 12);
+  }
+}
+
+function pointInRect(px, py, r) {
+  return (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h);
+}
+
+function tryToggleMusicAt(px, py) {
+  if (!bgMusic || !bgMusic.ready) return;
+
+  const p = musicUI;
+  if (pointInRect(px, py, p.playRect)) {
+    if (bgMusic.isPaused()) bgMusic.play(); else bgMusic.pause();
+    return;
+  }
+  if (pointInRect(px, py, p.muteRect)) {
+    bgMusic.setMuted(!bgMusic.isMuted());
+  }
+}
+
+function mousePressed() {
+  tryToggleMusicAt(mouseX, mouseY);
 }

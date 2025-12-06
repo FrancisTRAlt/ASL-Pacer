@@ -1,16 +1,95 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="stylesheet" href="styles.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ASL Pacer</title>
-    <script src="./lib/p5.min.js"></script>
-    <script src="./lib/ml5.min.js"></script>
-    <script src="./lib/supabase.js"></script>
-  </head>
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASL Pacer</title>
+  <script src="./lib/p5.min.js"></script>
+  <script src="./lib/ml5.min.js"></script>
+  <script src="./lib/supabase.js"></script>
+</head>
 
-  <body>
-    <script src="/main.js"></script>
-  </body>
+<body>
+  <script src="/main.js"></script>
+
+  <!-- Hidden YouTube player for background music -->
+  <div id="yt-music-player" style="width:1px;height:1px;position:absolute;left:-9999px;top:-9999px;"></div>
+
+  <script>
+    // Load the YouTube IFrame Player API asynchronously (required)  ── docs: IFrame API needs a global onYouTubeIframeAPIReady. [1](https://pub.dev/documentation/youtube_iframe_interop/latest/youtube_iframe_interop/PlayerVars-class.html)
+    (function loadYTAPI() {
+      var tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      var firstScript = document.getElementsByTagName('script')[0];
+      firstScript.parentNode.insertBefore(tag, firstScript);
+    })();
+
+    // Facade used by p5 HUD and menu
+    window.bgMusic = {
+      ready: false,
+      paused: true,
+      muted: true,
+      play: () => { },
+      pause: () => { },
+      setMuted: (m) => { },
+      isPaused: () => window.bgMusic.paused,
+      isMuted: () => window.bgMusic.muted,
+      cue: (videoId) => { },           // <-- NEW: load (cue) without playing
+      setLoopEnabled: (on) => { }      // optional: control loop behavior
+    };
+
+    var ytMusicPlayer = null;
+    var autoLoop = true; // loop when a video ends (for later-cued videos too)
+
+    function onYouTubeIframeAPIReady() {
+      const initialId = ""; // harmless default; will be replaced by user cue
+      ytMusicPlayer = new YT.Player('yt-music-player', {
+        height: '200', width: '200',
+        videoId: initialId,
+        playerVars: {
+          autoplay: 0,         // <-- DO NOT autoplay
+          controls: 0,
+          rel: 0,
+          modestbranding: 1,
+          playsinline: 1,
+          loop: 1,             // loop requires playlist matching the video ID
+          playlist: initialId
+        },
+        events: {
+          onReady: function (e) {
+            e.target.mute(); // start muted (policy friendly) [2](https://www.encodedna.com/javascript/youtube-api-embed-video-with-mute-sound-setvolume-onstatechange-event.htm)
+            // remain paused until user presses Play
+            window.bgMusic.ready = true;
+            window.bgMusic.paused = true;
+            window.bgMusic.muted = true;
+
+            window.bgMusic.play = () => { e.target.playVideo(); window.bgMusic.paused = false; };
+            window.bgMusic.pause = () => { e.target.pauseVideo(); window.bgMusic.paused = true; };
+            window.bgMusic.setMuted = (m) => {
+              if (m) e.target.mute(); else e.target.unMute();
+              window.bgMusic.muted = m;
+            };
+            // Cue a new video ID (load thumbnail/buffer but don't play)  ── uses cueVideoById. [1](https://pub.dev/documentation/youtube_iframe_interop/latest/youtube_iframe_interop/PlayerVars-class.html)
+            window.bgMusic.cue = (videoId) => {
+              if (!videoId) return;
+              e.target.cueVideoById(videoId);
+              window.bgMusic.paused = true;
+              window.bgMusic.muted = true;
+            };
+            window.bgMusic.setLoopEnabled = (on) => { autoLoop = !!on; };
+          },
+          onStateChange: function (ev) {
+            if (ev.data === YT.PlayerState.PLAYING) window.bgMusic.paused = false;
+            if (ev.data === YT.PlayerState.PAUSED) window.bgMusic.paused = true;
+            if (ev.data === YT.PlayerState.ENDED && autoLoop) {
+              // For later-cued single videos, restart to mimic loop  ── common workaround when playlist param can't change post-init. [5](https://stackoverflow.com/questions/70719678/html5-video-autoplay-with-sound-unmuted)
+              ytMusicPlayer.playVideo();
+            }
+          }
+        }
+      });
+    }
+  </script>
+</body>
 </html>

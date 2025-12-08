@@ -107,6 +107,7 @@ function draw() {
     if (progress >= 99) {
       progress = 100;
       isLoading = false;
+      showMusicUrlControls();
     }
     return; // Stop here until loading is done
   }
@@ -164,7 +165,7 @@ function draw() {
   // DRAW MUSIC HUD
   if (!bgMusic && window.bgMusic) bgMusic = window.bgMusic; // late-binding
   drawMusicHUD();
-
+  
   // Fade transition to a different page
   if (isFading) {
     fadeAlpha = min(fadeAlpha + 10, 255);
@@ -284,7 +285,6 @@ function highlightButton(btn) { // When the button is highlighted
 // ---------------- BUTTON SETUP IN RESPECTIVE PLACE ----------------
 // ---------------- MENU
 function setupMenuButtons() {
-  showMusicUrlControls();
   buttons = [
     createButtonObj("Start Game", width / 2 - 100, height / 2 - 100, 200, 80, () => showGameOptions()),
     createButtonObj("Credits", width / 2 - 100, height / 2, 200, 80, () => showCredits())

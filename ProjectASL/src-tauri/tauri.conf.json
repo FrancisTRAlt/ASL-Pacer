@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "projectasl",
+  "productName": "ASL-Pacer",
   "version": "0.1.0",
   "identifier": "com.xst-tran6832.projectasl",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "projectasl",
+        "title": "ASL-Pacer",
         "width": 800,
         "height": 600,
         "resizable": false,
@@ -25,9 +25,7 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
+      "icons/Logo.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ]

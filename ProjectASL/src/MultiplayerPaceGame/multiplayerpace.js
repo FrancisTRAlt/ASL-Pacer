@@ -580,6 +580,8 @@ async function joinRoom(id) { // Joining a room
   players = {};
   roomId = id;
 
+  gameState = "waiting";
+
   // Keep only Main Menu button; hide it in room.
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
@@ -620,6 +622,8 @@ function createRoom() { // Creating your room
   roomId = "room" + getRandomLetterAndNumber(); // Random generated room ID
   players = {};
 
+  gameState = "waiting";
+
   // Hide the main menu button
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
@@ -658,6 +662,7 @@ function leaveRoom() {
     client.unsubscribe(`game/rooms/${roomId}/hands/#`);
   }
   
+  gameState = "waiting";
   for (let id in players) {
     if (players[id]) {
       players[id].remoteHand = null; // clear remote hand data

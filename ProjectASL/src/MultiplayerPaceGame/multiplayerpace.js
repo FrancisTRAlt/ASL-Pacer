@@ -44,6 +44,13 @@ const PLAYER_TIMEOUT = 60000; // 60s
 let lastMatchTime = 0;
 let gameState = "waiting";
 
+// ---- MULTI-HAND STREAMING
+const HAND_FPS = 10;            // publish ~10 frames per second
+const HAND_STALE_MS = 2000;     // hide remote hand if older than 2s
+let lastHandPublishAt = 0;
+
+const playerColors = {};
+
 // error display
 let errorMessage = "";
 let errorTimer = 0;
@@ -139,6 +146,8 @@ function draw() {
   else if (currentState === "countdown") drawCountdown();
   else if (currentState === "game") drawGame();
   else if (currentState === "gameover") drawGameOver();
+  // Draw player's hand
+  if (roomId && (currentState === "room" || currentState === "game")) maybePublishHand();
   drawPlayerCount();
 }
 
@@ -230,7 +239,7 @@ function drawMenu() {
 
       // Optional: require a valid username before joining
       if (!/^[A-Za-z0-9_]{3,16}$/.test(playerName)) {
-        errorMessage = "Set a valid username first (3–16 chars).";
+        errorMessage = "Set a valid username first (3–10 chars).";
         errorTimer = millis();
         return;
       }
@@ -297,6 +306,7 @@ function drawRoom() {
       buttons.push(leaveButton);
     }
     leaveButton.show();
+    drawAllHands();
   }
 }
 
@@ -394,6 +404,7 @@ function drawGame() {
   fill(0, 255, 0);
   text(classification, boxCenterX, boxCenterY - 100);
   classification = "";
+  drawAllHands();
 }
 
 // --------------------- GAME OVER ---------------------
@@ -518,6 +529,17 @@ function handleMQTTMessage(topic, message) { // This handles players if they are
     } else if (topic.endsWith("/state")) {
       const { state } = data;
       gameState = state;
+    } else if (topic.includes("/hands/")) {
+      const data = JSON.parse(message.toString());
+      const senderId = data.playerId;
+      if (!senderId || senderId === playerId) return;
+
+      if (!players[senderId]) {
+        players[senderId] = { name: `Player?`, score: 0, ready: false, lastUpdate: Date.now() };
+      }
+
+      players[senderId].remoteHand = { data: denormalizeHandForDraw(data.hand), ts: data.ts || Date.now() };
+      players[senderId].lastUpdate = data.ts || Date.now();
     }
   } catch (err) {
     console.error("Invalid MQTT message:", err);
@@ -589,6 +611,7 @@ async function joinRoom(id) { // Joining a room
   }
 
   // Otherwise, join the room
+  client.subscribe(`game/rooms/${roomId}/hands/#`);
   playerId = addPlayer(playerName);
   publishPlayers();
 }
@@ -607,6 +630,7 @@ function createRoom() { // Creating your room
 
   // We are in a room that has one player (Yourself)
   client.subscribe(`game/rooms/${roomId}/#`);
+  client.subscribe(`game/rooms/${roomId}/hands/#`);
   playerId = addPlayer(playerName);
   publishPlayers();
 }
@@ -631,6 +655,13 @@ function leaveRoom() {
 
   if (client && roomId) {
     client.unsubscribe(`game/rooms/${roomId}/#`);
+    client.unsubscribe(`game/rooms/${roomId}/hands/#`);
+  }
+  
+  for (let id in players) {
+    if (players[id]) {
+      players[id].remoteHand = null; // clear remote hand data
+    }
   }
 
   currentState = "menu";
@@ -925,5 +956,109 @@ function drawHandSkeleton(hand, fingers) {
       const mcp = mapPt(mcpName);
       if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
     }
+  }
+}
+
+function getPlayerColor(id) {
+  if (!playerColors[id]) {
+    playerColors[id] = color(random(60, 255), random(60, 255), random(60, 255));
+  }
+  return playerColors[id];
+}
+
+function normalizeHandForSend(hand) {
+  if (!hand || !hand.keypoints) return null;
+  const named = {};
+  for (const kp of hand.keypoints) {
+    const name = kp.name || kp.part || kp.index;
+    if (typeof name === 'string') {
+      named[name] = { x: +(kp.x / video.width).toFixed(3), y: +(kp.y / video.height).toFixed(3) };
+    }
+  }
+  return named;
+}
+
+function denormalizeHandForDraw(norm) {
+  if (!norm) return null;
+  const obj = {};
+  for (const name in norm) {
+    const n = norm[name];
+    obj[name] = { x: n.x * video.width, y: n.y * video.height };
+  }
+  obj.keypoints = Object.keys(obj).map(name => ({ x: obj[name].x, y: obj[name].y }));
+  return obj;
+}
+
+
+
+function publishHand() {
+  if (!client || !roomId || !playerId) return;
+  if (!hands || !hands[0]) return;
+
+  const norm = normalizeHandForSend(hands[0]);
+  if (!norm) return;
+
+  client.publish(`game/rooms/${roomId}/hands/${playerId}`, JSON.stringify({
+    playerId, hand: norm, ts: Date.now()
+  }));
+}
+
+function maybePublishHand() {
+  const now = millis();
+  if (now - lastHandPublishAt < 1000 / HAND_FPS) return;
+  lastHandPublishAt = now;
+  publishHand();
+}
+
+
+function drawHandSkeletonColored(hand, fingers, pointColor, lineColor, nameLabel) {
+  const mapPt = (name) => {
+    const pt = hand[name];
+    if (!pt) return null;
+    const x = map(pt.x, 0, video.width, 0, width);
+    const y = map(pt.y, 0, video.height, 0, height);
+    return { x, y };
+  };
+
+  noStroke();
+  fill(pointColor || 'cyan');
+  for (const name in hand) {
+    const p = mapPt(name);
+    if (!p) continue;
+    ellipse(p.x, p.y, 12, 12);
+  }
+
+  stroke(lineColor || 255);
+  strokeWeight(2);
+  for (const finger in fingers) {
+    const chain = fingers[finger].map(mapPt).filter(Boolean);
+    for (let i = 0; i < chain.length - 1; i++) {
+      line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
+    }
+  }
+
+  if (nameLabel) {
+    const wrist = mapPt("wrist");
+    if (wrist) {
+      noStroke();
+      fill(255);
+      textSize(14);
+      text(nameLabel, wrist.x + 10, wrist.y - 10);
+    }
+  }
+}
+
+function drawAllHands() {
+  if (hands.length > 0 && hands[0]) {
+    drawHandSkeletonColored(hands[0], fingers, 'cyan', 255, playerName);
+  }
+  const now = Date.now();
+  for (const id in players) {
+    if (id === playerId) continue;
+    const p = players[id];
+    if (!p || !p.remoteHand || !p.remoteHand.data) continue;
+    if (now - p.remoteHand.ts > HAND_STALE_MS) continue;
+    const col = getPlayerColor(id);
+    drawHandSkeletonColored(p.remoteHand.data, fingers, col, col, p.name);
   }
 }

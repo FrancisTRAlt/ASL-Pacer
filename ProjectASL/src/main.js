@@ -625,9 +625,9 @@ function showMusicUrlControls() {
   // Create once
   if (!ytUrlInput) {
     ytUrlInput = createInput('');
-    ytUrlInput.attribute('placeholder', 'Paste YouTube URL');
-    ytUrlInput.style('margin-left', '10em');
-    ytUrlInput.style('width', '200px');
+    ytUrlInput.attribute('placeholder', 'YouTube URL');
+    ytUrlInput.style('margin-left', '16em');
+    ytUrlInput.style('width', '100px');
     ytUrlInput.style('padding', '10px');
     ytUrlInput.style('border-radius', '8px');
     ytUrlInput.style('border', '1px solid #8ab6ff');
@@ -635,8 +635,8 @@ function showMusicUrlControls() {
   }
   if (!ytUrlLoadBtn) {
     ytUrlLoadBtn = createButton('Load Music');
-    ytUrlLoadBtn.style('margin-left', '8px');
-    ytUrlLoadBtn.style('padding', '11px 18px');
+    ytUrlLoadBtn.style('margin-left', '3px');
+    ytUrlLoadBtn.style('padding', '0.1em 2em');
     ytUrlLoadBtn.style('border-radius', '8px');
     ytUrlLoadBtn.style('background', '#1d4ed8');
     ytUrlLoadBtn.style('color', '#fff');
@@ -653,12 +653,17 @@ function showMusicUrlControls() {
         return;
       }
       if (window.bgMusic?.cue) {
-        window.bgMusic.cue(id); // cue only (no play)
+        window.bgMusic.cue(id);            // cue only (no play)
         window.bgMusic.setLoopEnabled(true);
-        ytUrlLoadBtn.html('Loaded!');
+        
+        // IMPORTANT: ensure the new video is muted immediately after cueing
+        if (window.bgMusic.setMuted) window.bgMusic.setMuted(true);
+        if (window.bgMusic.setVolume) window.bgMusic.setVolume(0);
+
+        ytUrlLoadBtn.html('Music Loaded!');
         setTimeout(() => ytUrlLoadBtn.html('Load Music'), 2500);
       } else {
-        ytUrlLoadBtn.html('Error');
+        ytUrlLoadBtn.html('Music Error!');
         setTimeout(() => ytUrlLoadBtn.html('Load Music'), 2000);
       }
     });
@@ -670,7 +675,7 @@ function showMusicUrlControls() {
 
   // Start with the input aligned to the right edge
   const inputW = 360;
-  const btnW   = 120;       // visual width of button (approx)
+  const btnW = 120;       // visual width of button (approx)
   const spacing = 20;
 
   // Compute x so the input sits flush to the right margin
@@ -704,14 +709,14 @@ function drawMusicHUD() {
 
   // Compute button rects
   //Play
-  p.playRect.x = p.x + 75;           
+  p.playRect.x = p.x + 105;
   p.playRect.y = p.y - 15;
 
-  p.playRect.w = p.btnSize;          
+  p.playRect.w = p.btnSize;
   p.playRect.h = p.btnSize;
 
   //Mute
-  p.muteRect.x = p.x + 70 + p.btnSize + 16;
+  p.muteRect.x = p.x + 95 + p.btnSize + 16;
   p.muteRect.y = p.y - 15;
   p.muteRect.w = p.btnSize;
   p.muteRect.h = p.btnSize;
@@ -726,7 +731,7 @@ function drawMusicHUD() {
   textAlign(CENTER, CENTER);
   textSize(20);
   const playLabel = (!bgMusic || bgMusic.isPaused()) ? "▶" : "⏸";
-  const muteLabel = (!bgMusic || bgMusic.isMuted())  ? "🔇" : "🔊";
+  const muteLabel = (!bgMusic || bgMusic.isMuted()) ? "🔇" : "🔊";
   text(playLabel, p.playRect.x + p.playRect.w / 2, p.playRect.y + p.playRect.h / 2);
   text(muteLabel, p.muteRect.x + p.muteRect.w / 2, p.muteRect.y + p.muteRect.h / 2);
 
@@ -743,16 +748,29 @@ function pointInRect(px, py, r) {
   return (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h);
 }
 
+
 function tryToggleMusicAt(px, py) {
   if (!bgMusic || !bgMusic.ready) return;
-
   const p = musicUI;
+
+  // Play/Pause button
   if (pointInRect(px, py, p.playRect)) {
-    if (bgMusic.isPaused()) bgMusic.play(); else bgMusic.pause();
+    if (bgMusic.isPaused()) {
+      // IMPORTANT: ensure silence before starting playback
+      if (bgMusic.setMuted) bgMusic.setMuted(true);
+      if (bgMusic.setVolume) bgMusic.setVolume(0); // in case your facade supports volume
+      bgMusic.play();
+    } else {
+      bgMusic.pause();
+    }
     return;
   }
+
+  // Mute/Unmute button
   if (pointInRect(px, py, p.muteRect)) {
-    bgMusic.setMuted(!bgMusic.isMuted());
+    const willMute = !bgMusic.isMuted();
+    bgMusic.setMuted(willMute);
+    if (bgMusic.setVolume) bgMusic.setVolume(willMute ? 0 : 100);
   }
 }
 

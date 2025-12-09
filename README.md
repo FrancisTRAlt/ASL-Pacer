@@ -3,11 +3,11 @@
 A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js to perform Pose Estimation to determine the letter in the Alphabet.
 
 ### Table of Contents
-- [App Demo](https://github.com/FrancisTRAlt/ASL-Pacer/edit/main/README.md#app-demo)
-- [Get Started](https://github.com/FrancisTRAlt/ASL-Pacer/edit/main/README.md#get-started)
-- [Training the Model](https://github.com/FrancisTRAlt/ASL-Pacer/edit/main/README.md#training-the-model)
-- [Credits / Acknowledgements](https://github.com/FrancisTRAlt/ASL-Pacer/edit/main/README.md#credits--acknowledgements)
-- [License](https://github.com/FrancisTRAlt/ASL-Pacer/edit/main/README.md#license)
+- [App Demo](https://github.com/FrancisTRAlt/ASL-Pacer#app-demo)
+- [Get Started](https://github.com/FrancisTRAlt/ASL-Pacer#get-started)
+- [Training the Model](https://github.com/FrancisTRAlt/ASL-Pacer#training-the-model)
+- [Credits / Acknowledgements](https://github.com/FrancisTRAlt/ASL-Pacer#credits--acknowledgements)
+- [License](https://github.com/FrancisTRAlt/ASL-Pacer#license)
 
 
 # App Demo

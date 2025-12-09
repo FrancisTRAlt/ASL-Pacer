@@ -1,6 +1,6 @@
 # ASL-Pacer
 
-A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js to perform Pose Estimation to determine the the letter in the Alphabet.
+A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js to perform Pose Estimation to determine the letter in the Alphabet.
 
 <br>
 

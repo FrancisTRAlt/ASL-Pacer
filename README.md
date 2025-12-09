@@ -1,7 +1,6 @@
 # ASL-Pacer
 
 A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js to perform Pose Estimation to determine the letter in the Alphabet.
-
 ### Table of Contents
 - [App Demo](#app-demo)
 - [Get Started](#get-started)
@@ -22,12 +21,11 @@ This uses MQTT [mosquitto](https://mosquitto.org/) to perform online connectivit
 
 # Get Started
 Here are the requirements in order to use this project.
-
-* This is built using Tauri. See their official documentation to install Tauri: https://v2.tauri.app/start/prerequisites/
-* p5.js: https://p5js.org/download/
-* ml5.js: https://docs.ml5js.org/#/
-* Supabase: https://supabase.com/docs
-* Arduino: https://www.arduino.cc/
+* [Tauri](https://v2.tauri.app/start/prerequisites) – Desktop app framework
+* [p5.js](https://p5js.org/download/) – Creative coding library
+* [ml5.js](https://ml5js.org/) – Machine learning for the web
+* [Supabase](https://supabase.com/) – Database and authentication
+* [Arduino](https://www.arduino.cc/) – Hardware integration
 
 ## Installation
 

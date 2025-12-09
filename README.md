@@ -24,9 +24,11 @@ ml5.handPose({ runtime: "mediapipe" }, { flipped: true });
 <br>
 <img width="522" height="586" alt="image" src="https://github.com/user-attachments/assets/0db92bd6-d10c-48e1-aff6-e225a99620b3" />
 <br>
-[Source Code used to train the model](https://gist.github.com/FrancisTRAlt/589bbb1a6720fabb5206abb932852e06).
 <br>
-<i>This has been trained using only right hand.</i>
+
+[See the Source Code that was used to train the model](https://gist.github.com/FrancisTRAlt/589bbb1a6720fabb5206abb932852e06).
+<br>
+<i>Note: This has been trained using only right hand.</i>
 
 
 ## Prerequisites

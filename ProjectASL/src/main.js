@@ -53,8 +53,14 @@ async function setup() {
   createCanvas(800, 600);
   bgMusic = window.bgMusic || null;
   // Setup leeaderboard
-  await loadConfigAndInitSupabase();
-  aslLeaderboardData = await fetchLeaderboard();
+
+  let online = navigator.onLine;
+  if (online) {
+    await loadConfigAndInitSupabase();        // uses fetch('config.json')
+    aslLeaderboardData = await fetchLeaderboard();
+  } else {
+    aslLeaderboardData = []; // local placeholder
+  }
 
   // Start loading
   isLoading = true;
@@ -165,7 +171,7 @@ function draw() {
   // DRAW MUSIC HUD
   if (!bgMusic && window.bgMusic) bgMusic = window.bgMusic; // late-binding
   drawMusicHUD();
-  
+
   // Fade transition to a different page
   if (isFading) {
     fadeAlpha = min(fadeAlpha + 10, 255);
@@ -655,7 +661,7 @@ function showMusicUrlControls() {
       if (window.bgMusic?.cue) {
         window.bgMusic.cue(id);            // cue only (no play)
         window.bgMusic.setLoopEnabled(true);
-        
+
         // IMPORTANT: ensure the new video is muted immediately after cueing
         if (window.bgMusic.setMuted) window.bgMusic.setMuted(true);
         if (window.bgMusic.setVolume) window.bgMusic.setVolume(0);

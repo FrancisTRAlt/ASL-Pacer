@@ -11,7 +11,7 @@ This game includes:
 
 ## Training the Model
 
-This is built using ml5.js and p5.js to perform Pose Estimation for each letter. Collected a total of 54,000 Pose Estimation data (2000 for each letter. For "X", it is 4000. For "Y" it is "6000).
+This is built using ml5.js and p5.js to perform Pose Estimation for each letter. Collected a total of 54,000 Pose Estimation data (2000 for each letter. For "X", it is 4000. For "Y" it is 6000).
 The settings I used to train the model:
 ```
 epoch = 1000;
@@ -21,7 +21,10 @@ hiddenUnits = 2048;
 
 ml5.handPose({ runtime: "mediapipe" }, { flipped: true });
 ```
+<br>
+<img width="522" height="586" alt="image" src="https://github.com/user-attachments/assets/0db92bd6-d10c-48e1-aff6-e225a99620b3" />
 [Source Code used to train the model](https://gist.github.com/FrancisTRAlt/589bbb1a6720fabb5206abb932852e06).
+<br>
 <i>This has been trained using only right hand.</i>
 
 

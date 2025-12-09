@@ -142,4 +142,5 @@ This will give you an exe file in the "src-tauri" folder. (Assume the user is in
 
 ## Other information
 - This project was inspired by Code Train: https://www.youtube.com/channel/UCvjgXvBlbQiydffZU7m1_aw
+- The model is trained here: [Source Code](https://gist.github.com/FrancisTRAlt/589bbb1a6720fabb5206abb932852e06)
 - This project satisfy the course "SEIS 744: IoT with Machine Learning".

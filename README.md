@@ -9,6 +9,22 @@ This game includes:
 - Multiplayer: Built using MQTT for online connectivity.
 
 
+## Training the Model
+
+This is built using ml5.js and p5.js to perform Pose Estimation for each letter. Collected a total of 54,000 Pose Estimation data (2000 for each letter. For "X", it is 4000. For "Y" it is "6000).
+The settings I used to train the model:
+```
+epoch = 1000;
+batchSize = 128;
+learningRate = 0.001;
+hiddenUnits = 2048;
+
+ml5.handPose({ runtime: "mediapipe" }, { flipped: true });
+```
+[Source Code used to train the model](https://gist.github.com/FrancisTRAlt/589bbb1a6720fabb5206abb932852e06).
+<i>This has been trained using only right hand.</i>
+
+
 ## Prerequisites
 
 * This is built using Tauri. See their official documentation to install Tauri: https://v2.tauri.app/start/prerequisites/
@@ -30,7 +46,6 @@ $ npm install
 ```
 
 #### Step 2: Database Configuations
-
 Copy the "config.example.json" file and rename the one you copied "config.json".
 Then, replace "YOUR_SUPABASE_URL" and "YOUR_SUPABASE_ANON_KEY" with your own.
 <br>
@@ -146,7 +161,8 @@ $ npm run tauri build
 ```
 This will give you an exe file in the "src-tauri" folder. (Assume the user is in Windows).
 
+
 ## Other information
+
 - This project was inspired by Code Train: https://www.youtube.com/channel/UCvjgXvBlbQiydffZU7m1_aw.
-- The model is trained here: [Source Code](https://gist.github.com/FrancisTRAlt/589bbb1a6720fabb5206abb932852e06).
 - This project satisfy the course "SEIS 744: IoT with Machine Learning".

@@ -1,4 +1,29 @@
-// --------------------- GLOBAL STATE ---------------------
+
+/**
+ * ASL Multiplayer (p5.js + ml5.js + MQTT over WebSockets)
+ *
+ * ───────────────────────────────────────────────────────────────────────────────
+ * MQTT (as used in this code)
+ * - Clients connect to a broker (here: test.mosquitto.org via WSS).
+ * - You PUBLISH messages to string "topics" (e.g., "game/rooms/ROOM_ID/players").
+ * - Other clients SUBSCRIBE to topics to receive those messages.
+ * - "Retained" messages (retain: true) persist at the broker; new subscribers
+ *   immediately receive the last retained message. We use that for room snapshots.
+ * - We use several topics:
+ *     game/rooms/{roomId}/players          → retained snapshot of all players
+ *     game/rooms/{roomId}/players/update   → individual player updates (non-retained)
+ *     game/rooms/{roomId}/ping             → heartbeats to mark presence
+ *     game/rooms/{roomId}/start            → signal to start a new round
+ *     game/rooms/{roomId}/state            → game state sync ("waiting", "in-progress", "gameover")
+ *     game/rooms/{roomId}/hands/{playerId} → throttled hand pose stream (~10 FPS)
+ * - Heartbeats (periodic "ping") update each player's last seen time; we remove
+ *   players that timeout (no heartbeat).
+ * - Hand data is normalized to video size for transport; receivers denormalize
+ *   and draw in their local canvas.
+ * ───────────────────────────────────────────────────────────────────────────────
+ */
+
+// ------------------------------ GLOBAL STATE ----------------------------------
 // Hand detection
 let video, handPose, hands = [];
 let classifier;
@@ -26,57 +51,51 @@ let words = [];
 let currentWord = "";
 let currentIndex = 0;
 
-// MQTT
+// ------------------------------- MQTT -----------------------------------------
+// IMPORTANT: This expects the MQTT client (browser) library loaded in HTML,
+// e.g. https://unpkg.com/mqtt/dist/mqtt.min.js</script>
 let client;
-const brokerUrl = "wss://test.mosquitto.org:8081";
+const brokerUrl = "wss://test.mosquitto.org:8081"; // Public test broker over WebSocket Secure
 let clientId = `client_${Math.random().toString(16).slice(2)}`;
-let roomId = null; //ID of the room
-let playerId = null; //Player UNIQUE id in case of dup
-let players = {}; // { playerId: { name, score, ready, lastUpdate } }
-
+let roomId = null;    // The room code (string)
+let playerId = null;  // Unique player ID in room
+let players = {};     // { playerId: { name, score, ready, left?, lastUpdate, remoteHand? } }
 let buttons = [];
 let readyButton;
 let roomInput;
 
-const HEARTBEAT_INTERVAL = 10000; // 10s
-const PLAYER_TIMEOUT = 60000; // 60s
+const HEARTBEAT_INTERVAL = 10000; // 10s heartbeat to mark active players
+const PLAYER_TIMEOUT = 60000;     // 60s inactivity → remove player
 
 let lastMatchTime = 0;
 let gameState = "waiting";
 
-// ---- MULTI-HAND STREAMING
-const HAND_FPS = 10;            // publish ~10 frames per second
-const HAND_STALE_MS = 2000;     // hide remote hand if older than 2s
+// ---- Multi-hand streaming over MQTT ------------------------------------------
+const HAND_FPS = 10;        // publish ~10 frames per second
+const HAND_STALE_MS = 2000; // hide remote hand if older than 2s
 let lastHandPublishAt = 0;
-
 const playerColors = {};
 
-// error display
+// Error / info display
 let errorMessage = "";
 let errorTimer = 0;
-
-// Username input + info message
-let usernameInput;    // input box for username in menu
+let usernameInput; // input box for username in menu
 let infoMessage = ""; // green success/info text
 let infoTimer = 0;
 
-
-
-
-
-// --------------------- PRELOAD ---------------------
+// ------------------------------- PRELOAD ---------------------------------------
 function preload() {
+  // ml5 HandPose model (flipped for webcam mirror effect)
   handPose = ml5.handPose({ flipped: true });
+  // Load word list
   words = loadStrings("../lib/words_alpha.txt");
 }
 
-
-
-// --------------------- SETUP ---------------------
+// --------------------------------- SETUP ---------------------------------------
 function setup() {
   createCanvas(800, 600);
 
-  // Room code input
+  // ----- UI: Room code input -----
   roomInput = createInput('');
   roomInput.attribute('placeholder', 'Enter Code');
   roomInput.hide();
@@ -91,7 +110,7 @@ function setup() {
   roomInput.style('box-sizing', 'border-box');
   roomInput.style('width', '250px');
 
-  // Username input (same style as roomInput) ---
+  // ----- UI: Username input -----
   usernameInput = createInput('');
   usernameInput.attribute('placeholder', 'Enter Username');
   usernameInput.hide();
@@ -109,11 +128,12 @@ function setup() {
   playerName = "Player" + floor(random(1000, 9999));
   usernameInput.value(playerName); // prefill
 
+  // Webcam capture
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
 
-  // Get the ML model
+  // ML backend + classifier
   ml5.setBackend("webgl");
   classifier = ml5.neuralNetwork({ task: "classification" });
   classifier.load({
@@ -122,35 +142,43 @@ function setup() {
     weights: "../ml5Model/model.weights.bin",
   }, modelLoaded);
 
-  // Get the handpose
+  // Start handpose detection
   handPose.detectStart(video, gotHands);
   connections = handPose.getConnections();
 
-  setupMQTT(); // MQTT for online connection
+  // ----- MQTT connection -----
+  setupMQTT();
 
-  // Other
+  // Game word prepare
   currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
+
+  // Heartbeat & cleanup loops
   setInterval(sendHeartbeat, HEARTBEAT_INTERVAL);
   setInterval(cleanInactivePlayers, HEARTBEAT_INTERVAL);
 }
 
-
-
-// --------------------- DRAW ---------------------
+// ---------------------------------- DRAW ---------------------------------------
 function draw() {
   drawSpaceBackground(); // Black background with stars
-  if (currentState === "menu") drawMenu();
-  else if (currentState === "room") drawRoom(); // Lobby
-  // Enter the Game
+
+  // State machine
+  if (currentState === "menu")      drawMenu();
+  else if (currentState === "room") drawRoom();      // Lobby
   else if (currentState === "countdown") drawCountdown();
   else if (currentState === "game") drawGame();
   else if (currentState === "gameover") drawGameOver();
-  // Draw player's hand
-  if (roomId && (currentState === "room" || currentState === "game")) maybePublishHand();
+
+  // Publish our hand stream only when in a room or game
+  if (roomId && (currentState === "room" || currentState === "game")) {
+    maybePublishHand();
+  }
+
+  // HUD: player count
   drawPlayerCount();
 }
 
+// ------------------------ Background: star field --------------------------------
 function drawSpaceBackground() {
   background(0); // Black space
   noStroke();
@@ -173,9 +201,7 @@ function drawSpaceBackground() {
   }
 }
 
-
-
-// --------------------- MENU ---------------------
+// ---------------------------------- MENU ----------------------------------------
 function drawMenu() {
   drawSpaceBackground();
 
@@ -206,7 +232,6 @@ function drawMenu() {
   textSize(20);
   fill(200);
   text("Username", width / 2, height / 2 - 95);
-
   usernameInput.position(width / 2 - 125, height / 2 - 80);
   usernameInput.size(250);
   usernameInput.show();
@@ -227,7 +252,6 @@ function drawMenu() {
   textSize(20);
   fill(200);
   text("Room Code", width / 2, height / 2 + 30);
-
   roomInput.position(width / 2 - 125, height / 2 + 45);
   roomInput.size(250);
   roomInput.show();
@@ -243,7 +267,6 @@ function drawMenu() {
         errorTimer = millis();
         return;
       }
-
       if (!customCode) {
         errorMessage = "Please enter a Room ID!";
         errorTimer = millis();
@@ -271,8 +294,7 @@ function drawMenu() {
   buttons.forEach(btn => btn.show());
 }
 
-
-// --------------------- ROOM ---------------------
+// --------------------------------- ROOM (Lobby) --------------------------------
 function drawRoom() {
   textAlign(CENTER, TOP);
   textSize(32);
@@ -292,6 +314,7 @@ function drawRoom() {
       y += 40;
     });
 
+    // Ready button
     if (!readyButton) {
       readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
     }
@@ -301,11 +324,14 @@ function drawRoom() {
     readyButton.visible = true;
     readyButton.show();
 
+    // Leave button
     let leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
     if (!buttons.find(b => b.label === "Leave")) {
       buttons.push(leaveButton);
     }
     leaveButton.show();
+
+    // Draw our and remote hands
     drawAllHands();
   }
 }
@@ -319,9 +345,7 @@ function drawPlayerCount() {
   }
 }
 
-
-
-// --------------------- COUNTDOWN ---------------------
+// ------------------------------ COUNTDOWN --------------------------------------
 function startCountdown() {
   currentState = "countdown";
   countdownStartTime = millis();
@@ -341,41 +365,40 @@ function drawCountdown() {
   }
 }
 
-
-
-// --------------------- GAME ---------------------
+// ----------------------------------- GAME --------------------------------------
 function drawGame() {
+  // Draw local hand skeleton if present
   if (hands.length > 0) {
     drawHandSkeleton(hands[0], fingers);
   }
 
+  // End after duration
   if (millis() - startTime >= gameDuration) {
     endGame();
     return;
   }
 
+  // Classify current hand pose for letter
   if (hands[0]) {
     let inputData = flattenHandData();
     classifier.classify(inputData, gotClassification);
   }
 
+  // UI container
   fill("black");
   rect(width / 2 - 350, height / 2 + 20, 700, 350, 20);
-
   let boxCenterX = width / 2;
   let boxCenterY = height / 2 + 190;
 
+  // Draw target word with glow for matched letters
   textAlign(CENTER, CENTER);
   textSize(48);
-
   let spacing = 70;
   let totalWidth = (currentWord.length - 1) * spacing;
   let startX = boxCenterX - totalWidth / 2;
-
   for (let i = 0; i < currentWord.length; i++) {
     let letter = currentWord[i];
     let xPos = startX + i * spacing;
-
     if (i < currentIndex) {
       let glowStrength = abs(sin(frameCount * 0.1)) * 20;
       let glowColor = color(0, 255, 0, glowStrength);
@@ -388,8 +411,9 @@ function drawGame() {
     }
     text(letter, xPos, boxCenterY);
   }
-
   strokeWeight(0);
+
+  // Timer
   let elapsed = millis() - startTime;
   let seconds = floor(elapsed / 1000);
   let minutes = floor(seconds / 60);
@@ -399,22 +423,26 @@ function drawGame() {
   fill(255);
   text(timerText, boxCenterX - 280, boxCenterY - 120);
 
+  // Classification feedback
   textAlign(CENTER, CENTER);
   textSize(64);
   fill(0, 255, 0);
   text(classification, boxCenterX, boxCenterY - 100);
-  classification = "";
+  classification = ""; // clear after display
+
+  // Show all hands (local + remote)
   drawAllHands();
 }
 
-// --------------------- GAME OVER ---------------------
+// ------------------------------ GAME OVER --------------------------------------
 function endGame() {
   currentState = "gameover";
+
   // Reset readiness for all players
   Object.values(players).forEach(p => p.ready = false);
   publishPlayers();
 
-  // Update MQTT state to "gameover" instead of "waiting"
+  // Set MQTT state to "gameover" (retained so everyone sees consistent state)
   client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "gameover" }), { retain: true });
   gameState = "gameover";
 
@@ -443,6 +471,7 @@ function drawGameOver() {
     y += 40;
   });
 
+  // Ready button (to restart)
   if (!readyButton) {
     readyButton = new Button(width / 2 - 100, height - 150, 200, 60, "Ready", setReady);
   }
@@ -451,6 +480,7 @@ function drawGameOver() {
   readyButton.visible = true;
   readyButton.show();
 
+  // Leave button
   let leaveButton = buttons.find(b => b.label === "Leave");
   if (!leaveButton) {
     leaveButton = new Button(width / 2 - 100, height - 80, 200, 50, "Leave", leaveRoom);
@@ -459,6 +489,7 @@ function drawGameOver() {
   leaveButton.show();
 }
 
+// Restart round across all clients (triggered by MQTT "start")
 function restartGame() {
   currentState = "countdown";
   countdownStartTime = millis();
@@ -470,40 +501,56 @@ function restartGame() {
     }
   }
 
+  // Reset local score + all readiness and scores
   playerScore = 0;
   Object.values(players).forEach(p => {
     p.ready = false;
     p.score = 0;
   });
-
   publishPlayers();
+
+  // Broadcast "in-progress"
   client.publish(`game/rooms/${roomId}/state`, JSON.stringify({ state: "in-progress" }), { retain: true });
   gameState = "in-progress";
 
+  // New word
   currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
 
+  // Clean lobby buttons
   readyButton = null;
   buttons = buttons.filter(btn => btn.label === "Main Menu");
 }
 
-
-
-// --------------------- MQTT SETUP ---------------------
-function setupMQTT() { // Connect to the broker
+// ------------------------------ MQTT SETUP -------------------------------------
+function setupMQTT() {
+  // Connect to the broker.
+  // "clean: true" means the broker will not keep session state on disconnect.
   client = mqtt.connect(brokerUrl, { clean: true });
+
+  // Connection event
   client.on("connect", () => console.log("Connected to MQTT broker"));
+
+  // Route all incoming messages to our handler
   client.on("message", handleMQTTMessage);
 }
 
-function handleMQTTMessage(topic, message) { // This handles players if they are in the same broker
+/**
+ * Handle inbound MQTT messages per topic.
+ * This is the core "subscribe" path for room synchronization.
+ */
+function handleMQTTMessage(topic, message) {
   try {
     const data = JSON.parse(message.toString());
+
     if (topic.endsWith("/players/update")) {
+      // Merge a single player's update into local state
       const { playerId, name, score, ready, left, timestamp } = data;
       if (!playerId || !name) return;
       players[playerId] = { name, score, ready, left: !!left, lastUpdate: timestamp };
+
     } else if (topic.endsWith("/players")) {
+      // Full retained snapshot: replace local players with broker snapshot
       const snapshot = JSON.parse(message.toString());
       const cleanSnapshot = {};
       for (let id in snapshot) {
@@ -518,27 +565,37 @@ function handleMQTTMessage(topic, message) { // This handles players if they are
           };
         }
       }
-      players = cleanSnapshot; // Replace instead of merge. We want the player name to be seperate and not updating one over the other
+      // Replace instead of merge so we stay consistent with the retained snapshot
+      players = cleanSnapshot;
       redraw(); // Force UI refresh
 
-    } else if (topic.endsWith("/start")) { // If all players want to start
-      restartGame(); // All clients restart together
+    } else if (topic.endsWith("/start")) {
+      // All players ready → broker sends start → all clients restart simultaneously
+      restartGame();
+
     } else if (topic.endsWith("/ping")) {
+      // Heartbeat from any player → update last seen
       const { playerId, timestamp } = data;
       if (players[playerId]) players[playerId].lastUpdate = timestamp;
+
     } else if (topic.endsWith("/state")) {
+      // Sync room game state
       const { state } = data;
       gameState = state;
+
     } else if (topic.includes("/hands/")) {
-      const data = JSON.parse(message.toString());
+      // Hand streaming (remote players)
       const senderId = data.playerId;
-      if (!senderId || senderId === playerId) return;
+      if (!senderId || senderId === playerId) return; // ignore our own stream
 
       if (!players[senderId]) {
+        // Create a placeholder for unknown player so we can show their hand
         players[senderId] = { name: `Player?`, score: 0, ready: false, lastUpdate: Date.now() };
       }
-
-      players[senderId].remoteHand = { data: denormalizeHandForDraw(data.hand), ts: data.ts || Date.now() };
+      players[senderId].remoteHand = {
+        data: denormalizeHandForDraw(data.hand), // convert normalized → pixel coords
+        ts: data.ts || Date.now()
+      };
       players[senderId].lastUpdate = data.ts || Date.now();
     }
   } catch (err) {
@@ -546,14 +603,16 @@ function handleMQTTMessage(topic, message) { // This handles players if they are
   }
 }
 
+// Send periodic heartbeat. This lets others know we're alive.
 function sendHeartbeat() {
-  if (!roomId || !playerId || currentState === "menu") return; // Prevent sending in menu
+  if (!roomId || !playerId || currentState === "menu") return; // Don't ping in menu
   client.publish(`game/rooms/${roomId}/ping`, JSON.stringify({
     playerId,
     timestamp: Date.now()
   }));
 }
 
+// Remove inactive players that haven't pinged within PLAYER_TIMEOUT.
 function cleanInactivePlayers() {
   const now = Date.now();
   let removed = false;
@@ -564,7 +623,10 @@ function cleanInactivePlayers() {
     }
   }
   if (removed) {
-    publishPlayers(); // Always publish clean snapshot
+    // Publish clean snapshot so everyone converges on same player list
+    publishPlayers();
+
+    // If the room becomes empty, clear retained "players" at broker so the room disappears
     if (Object.keys(players).length === 0 && client && roomId) {
       client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
       console.log(`Room ${roomId} cleared from MQTT due to inactivity`);
@@ -572,31 +634,35 @@ function cleanInactivePlayers() {
   }
 }
 
-
-
-// --------------------- ROOM SETTINGS ---------------------
-async function joinRoom(id) { // Joining a room
+// ---------------------------- ROOM SETTINGS ------------------------------------
+/**
+ * Join an existing room.
+ * Subscribes to room topics, validates state/snapshot, and adds self as player.
+ */
+async function joinRoom(id) {
   if (!id) return;
+
   players = {};
   roomId = id;
-
   gameState = "waiting";
 
-  // Keep only Main Menu button; hide it in room.
+  // Hide "Main Menu" button in-room
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
 
   currentState = "room";
   roomInput.hide();
-  usernameInput.hide(); // hide username input in room state
+  usernameInput.hide();
 
+  // Subscribe to everything under the room prefix and explicit state
   client.subscribe(`game/rooms/${roomId}/#`);
   client.subscribe(`game/rooms/${roomId}/state`);
 
+  // Give broker a moment to deliver retained snapshot
   await new Promise(resolve => setTimeout(resolve, 500));
 
-
-  if (gameState !== "waiting") { // If the game is in progress, do not join
+  // If a round is already in progress, don't join
+  if (gameState !== "waiting") {
     errorMessage = "Game is in progress";
     errorTimer = millis();
     currentState = "menu";
@@ -604,7 +670,8 @@ async function joinRoom(id) { // Joining a room
     return;
   }
 
-  if (Object.keys(players).length === 0) { // if the room has 0 players to start off, it does not exist
+  // If there are no players in the retained snapshot, room doesn't exist
+  if (Object.keys(players).length === 0) {
     errorMessage = "Room does not exist!";
     errorTimer = millis();
     currentState = "menu";
@@ -612,40 +679,51 @@ async function joinRoom(id) { // Joining a room
     return;
   }
 
-  // Otherwise, join the room
+  // Join: subscribe to hand stream and add ourselves
   client.subscribe(`game/rooms/${roomId}/hands/#`);
   playerId = addPlayer(playerName);
   publishPlayers();
 }
 
-function createRoom() { // Creating your room
-  roomId = "room" + getRandomLetterAndNumber(); // Random generated room ID
+/**
+ * Create a new room.
+ * We immediately subscribe and publish a retained snapshot containing just us.
+ */
+function createRoom() {
+  roomId = "room" + getRandomLetterAndNumber(); // random room ID like "room-ABC123"
   players = {};
-
   gameState = "waiting";
 
-  // Hide the main menu button
+  // Hide "Main Menu" button
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = false; });
 
   currentState = "room";
   roomInput.hide();
-  usernameInput.hide(); // hide username input in room state
+  usernameInput.hide();
 
-  // We are in a room that has one player (Yourself)
+  // Subscribe to room topics and hands stream
   client.subscribe(`game/rooms/${roomId}/#`);
   client.subscribe(`game/rooms/${roomId}/hands/#`);
+
+  // Add ourselves and publish the snapshot (retained)
   playerId = addPlayer(playerName);
   publishPlayers();
 }
 
+/**
+ * Leave the room: unsubscribe, clear state, and (if last) clear retained snapshot.
+ */
 function leaveRoom() {
   console.log("Leaving room...");
+
   if (playerId && players[playerId]) {
     if (currentState === "gameover") {
-      players[playerId].left = true; // Mark disconnected
+      // Mark disconnected so scores remain in "game over" screen
+      players[playerId].left = true;
       publishPlayers();
     } else {
+      // Remove ourselves from players list
       delete players[playerId];
       publishPlayers();
     }
@@ -653,6 +731,7 @@ function leaveRoom() {
 
   const activePlayers = Object.values(players).filter(p => !p.left);
   if (activePlayers.length === 0 && client && roomId) {
+    // Clear retained snapshot at broker so room disappears
     client.publish(`game/rooms/${roomId}/players`, "", { retain: true });
     console.log(`Room ${roomId} cleared from MQTT`);
   }
@@ -661,20 +740,20 @@ function leaveRoom() {
     client.unsubscribe(`game/rooms/${roomId}/#`);
     client.unsubscribe(`game/rooms/${roomId}/hands/#`);
   }
-  
+
+  // Reset local UI/state
   gameState = "waiting";
   for (let id in players) {
     if (players[id]) {
       players[id].remoteHand = null; // clear remote hand data
     }
   }
-
   currentState = "menu";
   roomId = null;
   playerId = null;
   roomInput.hide();
 
-  // Return to menu: show Main Menu button
+  // Show "Main Menu" button again
   buttons = buttons.filter(btn => btn.label === "Main Menu");
   buttons.forEach(btn => { if (btn.label === "Main Menu") btn.visible = true; });
 
@@ -691,12 +770,16 @@ function getRandomLetterAndNumber() {
   return "-" + result;
 }
 
-
-
-// --------------------- PLAYER SETTINGS ---------------------
-function addPlayer(name) { // Add the player to the room with their data
-  const id = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`; //Player ID
+// ---------------------------- PLAYER SETTINGS ----------------------------------
+/**
+ * Add the local player to the room and publish an "update" event.
+ * (The full snapshot is published separately via publishPlayers)
+ */
+function addPlayer(name) {
+  const id = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`; // unique player ID
   players[id] = { name, score: 0, ready: false, lastUpdate: Date.now() };
+
+  // Notify others about this player's arrival
   client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
     playerId: id,
     name,
@@ -704,10 +787,15 @@ function addPlayer(name) { // Add the player to the room with their data
     ready: false,
     timestamp: Date.now()
   }));
+
   return id;
 }
 
-function publishPlayers() { // Player Status shared through MQTT
+/**
+ * Publish the full players snapshot to a retained topic.
+ * New subscribers receive this immediately, which is how "joining an existing room" works.
+ */
+function publishPlayers() {
   const cleanPlayers = {};
   for (let id in players) {
     const p = players[id];
@@ -724,7 +812,7 @@ function publishPlayers() { // Player Status shared through MQTT
   client.publish(`game/rooms/${roomId}/players`, JSON.stringify(cleanPlayers), { retain: true });
 }
 
-// Save & validate username, propagate if in a room
+// Save & validate username, propagate to room via MQTT if already joined
 function saveUsername() {
   const newName = usernameInput.value().trim();
 
@@ -762,10 +850,16 @@ function saveUsername() {
   infoTimer = millis();
 }
 
-function setReady() { // set the player ready if they are ready
+/**
+ * Toggle readiness; when all active players are ready, publish "start".
+ */
+function setReady() {
   if (!playerId || !players[playerId]) return;
+
   players[playerId].ready = !players[playerId].ready;
   readyButton.label = players[playerId].ready ? "Unready" : "Ready";
+
+  // Publish this player's readiness change
   client.publish(`game/rooms/${roomId}/players/update`, JSON.stringify({
     playerId,
     name: players[playerId].name,
@@ -774,8 +868,11 @@ function setReady() { // set the player ready if they are ready
     left: !!players[playerId].left,
     timestamp: Date.now()
   }));
+
+  // Publish full snapshot
   publishPlayers();
 
+  // If we're "waiting" or at "gameover" and everyone is ready, start a new round
   const activePlayers = Object.values(players).filter(p => !p.left);
   if (gameState === "waiting" || gameState === "gameover") {
     if (activePlayers.length > 0 && activePlayers.every(p => p.ready)) {
@@ -784,9 +881,7 @@ function setReady() { // set the player ready if they are ready
   }
 }
 
-
-
-// --------------------- BUTTON CLASS ---------------------
+// ------------------------------ BUTTON CLASS -----------------------------------
 class Button {
   constructor(x, y, w, h, label, callback) {
     this.x = x;
@@ -828,34 +923,35 @@ function mousePressed() {
   }
 }
 
-
-
-// --------------------- CALLBACKS ---------------------
+// ------------------------------- CALLBACKS -------------------------------------
 function gotHands(results) {
   hands = results;
 }
 
 function gotClassification(results) {
+  // Normalize confidences
   let sum = results.reduce((acc, r) => acc + r.confidence, 0);
   let normalized = results.map(r => ({ label: r.label, confidence: r.confidence / sum }));
   normalized.sort((a, b) => b.confidence - a.confidence);
 
+  // Require decent confidence to accept a letter
   if (normalized[0].confidence >= 0.6) {
     let now = millis();
     let expectedLetter = currentWord[currentIndex];
 
+    // Prevent rapid double-counting (500ms gate)
     if (normalized[0].label === expectedLetter && now - lastMatchTime > 500) {
       currentIndex++;
       lastMatchTime = now;
-      classification = ""; // Reset to prevent repeated triggers
+      classification = ""; // stop showing accepted letter
 
+      // Completed the word → increment score, publish, and load next
       if (currentIndex >= currentWord.length) {
         playerScore++;
         let player = Object.values(players).find(p => p.name === playerName);
         if (player) player.score = playerScore;
         publishPlayers();
 
-        // Load next word
         currentWord = random(words).toUpperCase().replace(/\s+/g, '');
         currentIndex = 0;
       }
@@ -863,15 +959,21 @@ function gotClassification(results) {
   }
 }
 
-function modelLoaded() { // Only loads in the main menu button
+/**
+ * After ML model loads, show "Main Menu" button (navigation).
+ */
+function modelLoaded() {
   buttons.push(new Button(width / 2 - 100, height / 2 + 190, 200, 60, "Main Menu", () => {
     window.location.href = "../index.html";
   }));
 }
 
-
-
-// --------------------- HAND DATA ---------------------
+// ------------------------------- HAND DATA -------------------------------------
+/**
+ * Convert hand keypoints into normalized features for the classifier:
+ * - Normalized x,y per keypoint within hand bbox
+ * - For each connection, normalized distance + angle
+ */
 function flattenHandData() {
   if (!hands[0]) return [];
   let hand = hands[0];
@@ -894,17 +996,20 @@ function flattenHandData() {
     let pointBIndex = connections[j][1];
     let pointA = hand.keypoints[pointAIndex];
     let pointB = hand.keypoints[pointBIndex];
-
     let dx = (pointB.x - pointA.x) / (maxX - minX);
     let dy = (pointB.y - pointA.y) / (maxY - minY);
     let distance = Math.sqrt(dx * dx + dy * dy);
-    let angle = Math.atan2(dy, dx) / Math.PI;
+    let angle = Math.atan2(dy, dx) / Math.PI; // normalize angle by π
     handData.push(distance);
     handData.push(angle);
   }
+
   return handData;
 }
 
+/**
+ * Draw a single hand skeleton (local) in cyan/white.
+ */
 function drawHandSkeleton(hand, fingers) {
   // Helper to safely fetch a point and map it to canvas coords
   const mapPt = (name) => {
@@ -964,6 +1069,9 @@ function drawHandSkeleton(hand, fingers) {
   }
 }
 
+/**
+ * Assign a persistent random color per remote player for drawing hands.
+ */
 function getPlayerColor(id) {
   if (!playerColors[id]) {
     playerColors[id] = color(random(60, 255), random(60, 255), random(60, 255));
@@ -971,18 +1079,29 @@ function getPlayerColor(id) {
   return playerColors[id];
 }
 
+/**
+ * Normalize a detected hand for sending over MQTT (values 0..1).
+ * We convert keypoints into a dictionary keyed by their names.
+ */
 function normalizeHandForSend(hand) {
   if (!hand || !hand.keypoints) return null;
+
   const named = {};
   for (const kp of hand.keypoints) {
-    const name = kp.name || kp.part || kp.index;
+    const name = kp.name || kp.part || kp.index; // be robust to different ml5 versions
     if (typeof name === 'string') {
-      named[name] = { x: +(kp.x / video.width).toFixed(3), y: +(kp.y / video.height).toFixed(3) };
+      named[name] = {
+        x: +(kp.x / video.width).toFixed(3),
+        y: +(kp.y / video.height).toFixed(3)
+      };
     }
   }
   return named;
 }
 
+/**
+ * Convert normalized hand coords back to pixels for drawing.
+ */
 function denormalizeHandForDraw(norm) {
   if (!norm) return null;
   const obj = {};
@@ -994,8 +1113,9 @@ function denormalizeHandForDraw(norm) {
   return obj;
 }
 
-
-
+/**
+ * Publish our hand skeleton to the broker (throttled in maybePublishHand).
+ */
 function publishHand() {
   if (!client || !roomId || !playerId) return;
   if (!hands || !hands[0]) return;
@@ -1008,6 +1128,9 @@ function publishHand() {
   }));
 }
 
+/**
+ * Limit hand publishing to HAND_FPS using a simple time gate.
+ */
 function maybePublishHand() {
   const now = millis();
   if (now - lastHandPublishAt < 1000 / HAND_FPS) return;
@@ -1015,7 +1138,9 @@ function maybePublishHand() {
   publishHand();
 }
 
-
+/**
+ * Draw a colored hand skeleton with optional name label (used for remote players).
+ */
 function drawHandSkeletonColored(hand, fingers, pointColor, lineColor, nameLabel) {
   const mapPt = (name) => {
     const pt = hand[name];
@@ -1025,6 +1150,7 @@ function drawHandSkeletonColored(hand, fingers, pointColor, lineColor, nameLabel
     return { x, y };
   };
 
+  // Points
   noStroke();
   fill(pointColor || 'cyan');
   for (const name in hand) {
@@ -1033,6 +1159,7 @@ function drawHandSkeletonColored(hand, fingers, pointColor, lineColor, nameLabel
     ellipse(p.x, p.y, 12, 12);
   }
 
+  // Lines
   stroke(lineColor || 255);
   strokeWeight(2);
   for (const finger in fingers) {
@@ -1042,6 +1169,7 @@ function drawHandSkeletonColored(hand, fingers, pointColor, lineColor, nameLabel
     }
   }
 
+  // Label (near wrist)
   if (nameLabel) {
     const wrist = mapPt("wrist");
     if (wrist) {
@@ -1053,16 +1181,22 @@ function drawHandSkeletonColored(hand, fingers, pointColor, lineColor, nameLabel
   }
 }
 
+/**
+ * Draw local hand (with our name) and all remote hands (with their names).
+ * Remote hands older than HAND_STALE_MS are ignored to avoid lag "ghosts".
+ */
 function drawAllHands() {
   if (hands.length > 0 && hands[0]) {
     drawHandSkeletonColored(hands[0], fingers, 'cyan', 255, playerName);
   }
+
   const now = Date.now();
   for (const id in players) {
-    if (id === playerId) continue;
+    if (id === playerId) continue; // skip ourselves
     const p = players[id];
     if (!p || !p.remoteHand || !p.remoteHand.data) continue;
     if (now - p.remoteHand.ts > HAND_STALE_MS) continue;
+
     const col = getPlayerColor(id);
     drawHandSkeletonColored(p.remoteHand.data, fingers, col, col, p.name);
   }

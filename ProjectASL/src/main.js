@@ -1,34 +1,40 @@
-// Video and hand tracking
-let video, handPose, hands = [];
+// =====================
+// Global test override
+// =====================
+// Set NET_TEST_OVERRIDE to:
+//   null  -> use real navigator.onLine (default)
+//   true  -> force ONLINE (testing)
+//   false -> force OFFLINE (testing)
+let NET_TEST_OVERRIDE = null;
+
+// Helper: determine online state (uses override if set)
+function isOnline() {
+  return (NET_TEST_OVERRIDE === null) ? navigator.onLine : !!NET_TEST_OVERRIDE;
+}
+
+// =====================
 // UI elements and state
+// =====================
 let buttons = [];
-let currentPage = "cameraCheck";
+let currentPage = "loading";
 const backgroundColor = "#0066dbff";
-// Gesture interaction state
-let lastPinch = false;
-let lastPinchTime = 0;
-const pinchCooldown = 1000;
-const fingers = {
-  thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
-  index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
-  middle: ["middle_finger_mcp", "middle_finger_pip", "middle_finger_dip", "middle_finger_tip"],
-  ring: ["ring_finger_mcp", "ring_finger_pip", "ring_finger_dip", "ring_finger_tip"],
-  pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
-};
-// Cursor animation properties
-let cursorRotation = 0;
-let cursorScale = 1;
-let bounceOffset = 0;
+
 // Loading screen state
 let isLoading = true;
 let progress = 0;
 let targetProgress = 0;
+
 // Fade transition state
 let isFading = false;
 let fadeAlpha = 0;
+
 // leaderboard data
 let aslLeaderboardData = [];
 let supabaseClient = null;
+
+// --- Connectivity ---
+let offlineMode = false;              // true when isOnline() === false
+let musicControlsVisible = false;     // track if URL controls are visible
 
 // --- MUSIC HUD ---
 let bgMusic = null; // facade provided by index.html
@@ -41,138 +47,299 @@ const musicUI = {
   playRect: { x: 0, y: 0, w: 40, h: 40 },
   muteRect: { x: 0, y: 0, w: 40, h: 40 }
 };
+
 // --- MUSIC URL CONTROLS (DOM on main menu) ---
 let ytUrlInput = null;
 let ytUrlLoadBtn = null;
 
+// ---------------- AUDIO VISUALIZER (Title bar) ----------------
+let visualizerActive = false;
+let audioAnalyser = null;
+let audioCtx = null;
+let freqData = null;
+let visualizerMode = "synthetic"; // "analyser" if we hook into real audio
+let analyserInitTried = false;
+let syntheticPhase = 0;
 
+// Attempt to initialize an analyser from the bgMusic facade or media element.
+// Falls back to "synthetic" animation if none is available.
+function initAudioAnalyzer() {
+  if (analyserInitTried) return visualizerMode === "analyser";
+  analyserInitTried = true;
 
+  try {
+    // If facade exposes an AnalyserNode directly
+    if (bgMusic?.getAnalyser) {
+      audioAnalyser = bgMusic.getAnalyser(); // expected to be an AnalyserNode
+      if (audioAnalyser) {
+        freqData = new Uint8Array(audioAnalyser.frequencyBinCount);
+        audioCtx = audioAnalyser.context || null;
+        visualizerMode = "analyser";
+        return true;
+      }
+    }
+
+    // If facade exposes the underlying HTMLMediaElement
+    if (bgMusic?.getMediaElement) {
+      const el = bgMusic.getMediaElement(); // HTMLMediaElement
+      if (el) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new Ctx();
+        const sourceNode = audioCtx.createMediaElementSource(el);
+        audioAnalyser = audioCtx.createAnalyser();
+        audioAnalyser.fftSize = 1024;
+        sourceNode.connect(audioAnalyser);
+        // Do NOT connect analyser to destination to avoid audio duplication.
+        // The element renders audio by itself.
+        freqData = new Uint8Array(audioAnalyser.frequencyBinCount);
+        visualizerMode = "analyser";
+        return true;
+      }
+    }
+  } catch (e) {
+    // If we fail, we will use synthetic animation instead.
+    console.warn("Audio analyser init failed:", e);
+  }
+
+  visualizerMode = "synthetic";
+  return false;
+}
+
+function updateVisualizerState() {
+  const playing = !offlineMode && bgMusic && bgMusic.ready && !bgMusic.isPaused();
+  visualizerActive = !!playing;
+
+  // Initialize analyser lazily when playback starts (and only once)
+  if (visualizerActive && !audioAnalyser && !analyserInitTried) {
+    initAudioAnalyzer();
+    // Resume context on user gesture if needed
+    if (audioCtx?.state === "suspended") {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+}
+
+function drawTitleAudioVisualizer() {
+  if (offlineMode || !visualizerActive) return;
+
+  // Title banner area:
+  const bannerTop = 0;
+  const bannerHeight = 87;
+  const areaY = bannerTop + 8;        // inset
+  const areaH = bannerHeight - 16;    // inset height
+  const barCount = 40;
+  const barGap = 2;
+  const barW = (width - (barCount - 1) * barGap) / barCount;
+
+  let levels = new Array(barCount).fill(0);
+
+  if (visualizerMode === "analyser" && audioAnalyser && freqData) {
+    audioAnalyser.getByteFrequencyData(freqData);
+    // Map frequency bins to bars (log-ish grouping)
+    for (let i = 0; i < barCount; i++) {
+      const start = Math.floor(i * freqData.length / barCount);
+      const end = Math.floor((i + 1) * freqData.length / barCount);
+      let sum = 0, count = Math.max(1, end - start);
+      for (let k = start; k < end; k++) sum += freqData[k];
+      const avg = sum / count; // 0..255
+      levels[i] = avg / 255;   // normalize 0..1
+    }
+  } else {
+    // Synthetic waveform animation when analyser not available
+    syntheticPhase += 0.08;
+    for (let i = 0; i < barCount; i++) {
+      const base = Math.sin(syntheticPhase + i * 0.25) * 0.5 + 0.5; // 0..1
+      const wobble = Math.sin(syntheticPhase * 0.7 + i * 0.6) * 0.25 + 0.25; // 0..0.5
+      levels[i] = Math.min(1, base * 0.7 + wobble * 0.3);
+    }
+  }
+
+  // Draw bars with a cyan-to-sky gradient, lightly translucent
+  push();
+  noStroke();
+  for (let i = 0; i < barCount; i++) {
+    const x = i * (barW + barGap);
+    const h = levels[i] * areaH;
+    const y = areaY + areaH - h;
+
+    // gradient color per bar
+    const cTop = color(0, 255, 255, 140);    // cyan
+    const cBot = color(135, 206, 235, 180);  // sky
+    const inter = levels[i];
+    fill(lerpColor(cTop, cBot, inter));
+    rect(x, y, barW, h, 4);
+  }
+  pop();
+
+  // Optional glow line
+  push();
+  const glowY = areaY + areaH * 0.15 + Math.sin(syntheticPhase * 0.5) * 6;
+  stroke(135, 206, 235, 140);
+  strokeWeight(2);
+  line(0, glowY, width, glowY);
+  pop();
+}
+
+// ---------------- BUTTON CLASS (Same visuals as singleplayer.js) ----------------
+class Button {
+  constructor(x, y, w, h, label, callback, opts = {}) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.label = label;
+    this.callback = callback;
+    this.visible = true;
+    this.disabled = !!opts.disabled;
+    this.tooltip = opts.tooltip || null;
+  }
+  show() {
+    if (!this.visible) return;
+    const hovered = !this.disabled && this.isHovered();
+    fill(hovered ? color(100, 150, 255) : (this.disabled ? color(60) : 80));
+    rect(this.x, this.y, this.w, this.h, 10);
+    fill(this.disabled ? 200 : 255);
+    textAlign(CENTER, CENTER);
+    textSize(24);
+    text(this.label, this.x + this.w / 2, this.y + this.h / 2);
+
+    if (hovered && this.tooltip) {
+      push();
+      textAlign(CENTER, TOP);
+      textSize(14);
+      fill(255);
+      text(this.tooltip, this.x + this.w / 2, this.y + this.h + 8);
+      pop();
+    }
+  }
+  isHovered() {
+    return this.visible &&
+      mouseX > this.x && mouseX < this.x + this.w &&
+      mouseY > this.y && mouseY < this.y + this.h;
+  }
+  click() {
+    if (this.visible && !this.disabled && this.isHovered()) {
+      this.callback();
+    }
+  }
+}
+
+function getVisibleButtons() {
+  return buttons.filter(b => b.visible);
+}
 
 // ---------------- SETUP ----------------
 async function setup() {
   createCanvas(800, 600);
-  bgMusic = window.bgMusic || null;
-  // Setup leeaderboard
+  bgMusic = window.bgMusic ?? null;
 
-  let online = navigator.onLine;
-  if (online) {
-    await loadConfigAndInitSupabase();        // uses fetch('config.json')
-    aslLeaderboardData = await fetchLeaderboard();
+  // Determine initial connectivity and set offline mode
+  offlineMode = !isOnline();
+
+  // Setup leaderboard only if online
+  if (!offlineMode) {
+    try {
+      await loadConfigAndInitSupabase(); // uses fetch('config.json')
+      aslLeaderboardData = await fetchLeaderboard();
+    } catch (e) {
+      console.warn('Leaderboard unavailable:', e);
+      aslLeaderboardData = [];
+    }
   } else {
-    aslLeaderboardData = []; // local placeholder
+    aslLeaderboardData = []; // placeholder when offline
   }
 
-  // Start loading
+  // Start loading (no camera/model anymore)
   isLoading = true;
   progress = 0;
-  targetProgress = 0;
+  targetProgress = 100; // go straight to 100%
   currentPage = "loading";
-
-  // Create video for hand gesture
-  video = createCapture(VIDEO, { flipped: true });
-  video.size(800, 600);
-  video.hide();
-
-  // Loading Screen
-  // Wait for video metadata
-  await new Promise(resolve => {
-    video.elt.onloadedmetadata = () => {
-      targetProgress = 50; // Animate toward 50%
-      resolve();
-    };
-  });
-  // Initialize handPose and wait for model load
-  await new Promise(resolve => {
-    handPose = ml5.handPose({ flipped: true }, () => {
-      targetProgress = 100; // Animate toward 100%
-      resolve();
-    });
-  });
-
-  // Start detection for handpose
-  handPose.detectStart(video, results => {
-    hands = results;
-  });
-
-  // After loading finishes, switch to menu
-  currentPage = "menu";
-  setupMenuButtons();
 }
-
-
 
 // ---------------- DRAW ----------------
 function draw() {
+  // Refresh offline state every frame (handles mid-session changes or test override)
+  const nowOffline = !isOnline();
+  if (nowOffline !== offlineMode) {
+    offlineMode = nowOffline;
+    if (offlineMode) {
+      destroyMusicUrlControls();
+      musicControlsVisible = false;
+      visualizerActive = false; // disable visualizer when offline
+    } else {
+      if (currentPage === 'menu') {
+        showMusicUrlControls();
+        musicControlsVisible = true;
+      }
+      // Re-fetch leaderboard when coming back online if on leaderboard page
+      if (currentPage === 'aslLeaderboard') {
+        loadConfigAndInitSupabase()
+          .then(fetchLeaderboard)
+          .then(data => { aslLeaderboardData = data || []; })
+          .catch(() => { aslLeaderboardData = []; });
+      }
+    }
+  }
+
   // Loading Screen
-  if (isLoading && currentPage !== "cameraCheck") {
-    // Smooth progress animation
+  if (isLoading) {
     progress = lerp(progress, targetProgress, 0.05);
-    // Show loading screen
     drawLoadingScreen();
-    // When progress reaches ~100, finish loading
     if (progress >= 99) {
       progress = 100;
       isLoading = false;
-      showMusicUrlControls();
+      currentPage = "menu";
+      setupMenuButtons();
+      if (!offlineMode) {
+        showMusicUrlControls();
+        musicControlsVisible = true;
+      }
     }
-    return; // Stop here until loading is done
+    return;
   }
 
-  // If anywhere but not in the camercheck state
-  if (currentPage !== "cameraCheck") {
-    drawSpaceBackground();
-    drawTitle();
+  // Background & Title
+  drawSpaceBackground();
+  drawTitle();
 
-    if (hands.length > 0) { // Hand detection
-      userIsOnline();
-      drawButtons();
-    } else {
-      textAlign(CENTER, CENTER);
-      textSize(36);
-      fill(255);
-      text("No Hand Detected", width / 2, height / 2);
-      text("Raise your Hand to Use the Menu", width / 2, height / 2 + 50);
-    }
+  // Status HUD (Online/Offline) + banner
+  drawOnlineStatus();
+  if (offlineMode) drawOfflineBanner();
+
+  // Page-specific content
+  if (currentPage === "singlePlayerInstruc") {
+    drawSinglePlayerInstructions();
+  } else if (currentPage === "MultiASLInstruc") {
+    drawMultiASLInstructions();
+  } else if (currentPage === "aslLeaderboard") {
+    drawASLLeaderboard();
+  } else if (currentPage === "credits") {
+    fill(0);
+    rect(width / 4, height / 4 - 50, width / 2, 170, 20);
+    textSize(48);
+    fill("SkyBlue");
+    text("Credits", width / 2, height / 4);
+    textSize(28);
+    fill("SkyBlue");
+    text("Developed by: Francis Tran", width / 2, height / 2 - 80);
+    textSize(20);
+    fill(180);
+    text("© 2025 ASL Pacer Project", width / 2, height - 70);
   }
 
-  // Hand detection (Note that we start from the menu. If we click "Start Game", show these options)
-  if (hands.length > 0) {
-    if (currentPage === "singlePlayerInstruc") { // ASL Survival
-      drawSinglePlayerInstructions();
-    } else if (currentPage === "MultiASLInstruc") { // ASL Pacer (Multiplayer)
-      drawMultiASLInstructions();
-    } else if (currentPage === "aslLeaderboard") { // Leaderboard in the ASL survival
-      drawASLLeaderboard();
-    } else if (currentPage === "credits") { // Credits
-      fill(0);
-      rect(width / 4, height / 4 - 50, width / 2, 170, 20);
+  // Update visualizer state based on music playback & offline mode
+  updateVisualizerState();
 
-      // Title
-      textSize(48);
-      fill("SkyBlue");
-      text("Credits", width / 2, height / 4);
+  // Draw buttons
+  drawButtons();
 
-      // Credits List
-      textSize(28);
-      fill("SkyBlue");
-      text("Developed by: Francis Tran", width / 2, height / 2 - 80);
-
-      // Footer
-      textSize(20);
-      fill(180);
-      text("© 2025 ASL Pacer Project", width / 2, height - 70);
-    }
+  // DRAW MUSIC HUD (hidden in offline mode)
+  if (!offlineMode) {
+    if (!bgMusic && window.bgMusic) bgMusic = window.bgMusic; // late-binding
+    drawMusicHUD();
   }
 
-  // Show the hand and its pinch function
-  if (hands.length > 0) handleHandInteraction(0, 0, video.width, video.height);
-  if (hands.length > 0) drawHandSkeleton(hands[0], fingers);
-
-  // DRAW MUSIC HUD
-  if (!bgMusic && window.bgMusic) bgMusic = window.bgMusic; // late-binding
-  drawMusicHUD();
-
-  // Fade transition to a different page
+  // Fade transition
   if (isFading) {
     fadeAlpha = min(fadeAlpha + 10, 255);
     fill(0, fadeAlpha);
@@ -180,13 +347,11 @@ function draw() {
   }
 }
 
-
-
 // ---------------- MENU BACKGROUND ----------------
 function drawSpaceBackground() {
-  background(0); // Black space
+  background(0);
   noStroke();
-  // Create stars once and store them in a static variable
+
   if (!drawSpaceBackground.stars) {
     drawSpaceBackground.stars = [];
     const numStars = 200;
@@ -200,15 +365,12 @@ function drawSpaceBackground() {
     }
   }
 
-  // Draw stars with smooth twinkle
   for (let s of drawSpaceBackground.stars) {
     let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
     fill(255, alpha);
     ellipse(s.x, s.y, s.size, s.size);
   }
 }
-
-
 
 // ---------------- LOADING SCREEN ----------------
 function drawLoadingScreen() {
@@ -217,20 +379,22 @@ function drawLoadingScreen() {
   textSize(36);
   fill(255);
   text("Loading...", width / 2, height / 2 - 50);
+
   const barWidth = 400, barHeight = 30;
   const barX = width / 2 - barWidth / 2;
   const barY = height / 2;
+
   fill(80);
   rect(barX, barY, barWidth, barHeight, 10);
+
   fill(135, 206, 235);
   const fillWidth = map(progress, 0, 100, 0, barWidth);
   rect(barX, barY, fillWidth, barHeight, 10);
+
   fill(255);
   textSize(20);
   text(`${progress.toFixed(1)}%`, width / 2, barY + barHeight + 25);
 }
-
-
 
 // ---------------- TITLE ----------------
 function drawTitle() {
@@ -239,6 +403,8 @@ function drawTitle() {
   textSize(48);
   const bounce = sin(frameCount * 0.05) * 10;
   const bannerHeight = 80;
+
+  // Banner gradient stripes
   for (let i = 0; i < bannerHeight; i++) {
     const inter = map(i, 0, bannerHeight, 0, 1);
     const c1 = color(30 + sin(frameCount * 0.02) * 30, 30, 60, 220);
@@ -246,6 +412,8 @@ function drawTitle() {
     stroke(lerpColor(c1, c2, inter));
     line(0, i, width, i);
   }
+
+  // Title echo/glow
   for (let i = 8; i > 0; i--) {
     fill(135, 206, 235, 30);
     text("ASL Pacer", width / 2, 40 + bounce);
@@ -254,149 +422,119 @@ function drawTitle() {
   text("ASL Pacer", width / 2 + 3, 43 + bounce);
   fill(255);
   text("ASL Pacer", width / 2, 40 + bounce);
+
+  // Audio visualizer overlay inside title bar (only when playing & online)
+  drawTitleAudioVisualizer();
+
   pop();
 }
 
-
-
 // ---------------- BUTTONS ----------------
-function createButtonObj(label, x, y, w, h, action) {
-  return { label, x, y, w, h, hidden: false, action };
+function drawButtons() {
+  buttons.forEach(btn => btn.show());
 }
 
-function drawButtons() { // Draw ALL buttons based on it is visible status
-  buttons.forEach(btn => {
-    if (!btn.hidden) drawButton(btn);
-  });
-}
-
-function drawButton(btn) { // Button blueprint
-  fill(0, 150);
-  rect(btn.x, btn.y, btn.w, btn.h, 10);
-  fill(255);
-  textAlign(CENTER, CENTER);
-  textSize(24);
-  text(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
-}
-
-function highlightButton(btn) { // When the button is highlighted
-  fill(255, 255, 0);
-  rect(btn.x, btn.y, btn.w, btn.h, 10);
-  fill(0);
-  textAlign(CENTER, CENTER);
-  textSize(24);
-  text(btn.label, btn.x + btn.w / 2, btn.y + btn.h / 2);
-}
-
-// ---------------- BUTTON SETUP IN RESPECTIVE PLACE ----------------
-// ---------------- MENU
+// ---------------- BUTTON SETUP ----------------
 function setupMenuButtons() {
   buttons = [
-    createButtonObj("Start Game", width / 2 - 100, height / 2 - 100, 200, 80, () => showGameOptions()),
-    createButtonObj("Credits", width / 2 - 100, height / 2, 200, 80, () => showCredits())
+    new Button(width / 2 - 100, height / 2 - 100, 200, 80, "Start Game", () => showGameOptions()),
+    new Button(width / 2 - 100, height / 2, 200, 80, "Credits", () => showCredits())
   ];
 }
 
 function showCredits() {
   currentPage = "credits";
   buttons = [
-    createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => { currentPage = "menu"; setupMenuButtons(); })
+    new Button(width / 2 - 100, height / 2, 200, 80, "Back", () => { currentPage = "menu"; setupMenuButtons(); })
   ];
 }
 
-
-// ---------------- MENU (After Start Game)
 function showGameOptions() {
   currentPage = "gameOptions";
   buttons = [
-    createButtonObj("Singleplayer", width / 2 - 220, height / 2 - 100, 200, 80, () => { showSinglePlayerInstruc(); }),
-    createButtonObj("Multiplayer", width / 2 + 20, height / 2 - 100, 200, 80, () => { showMultiASLInstruc(); }),
-    createButtonObj("Back", width / 2 - 100, height / 2, 200, 80, () => { currentPage = "menu"; setupMenuButtons(); })
+    new Button(width / 2 - 220, height / 2 - 100, 200, 80, "Singleplayer", () => { showSinglePlayerInstruc(); }),
+    new Button(
+      width / 2 + 20, height / 2 - 100, 200, 80, "Multiplayer",
+      () => { if (!offlineMode) showMultiASLInstruc(); },
+      { disabled: offlineMode, tooltip: offlineMode ? "Requires internet connection" : null }
+    ),
+    new Button(width / 2 - 100, height / 2, 200, 80, "Back", () => { currentPage = "menu"; setupMenuButtons(); })
   ];
 }
 
-
 // ---------------- SINGLEPLAYER (ASL Survival)
-function showSinglePlayerInstruc() { // Buttons shown
+function showSinglePlayerInstruc() {
   currentPage = "singlePlayerInstruc";
   buttons = [
-    createButtonObj("Play", width / 2 - 220, height / 2 + 70, 200, 80, () => {
+    new Button(width / 2 - 220, height / 2 + 70, 200, 80, "Play", () => {
       isFading = true;
       fadeAlpha = 0;
       setTimeout(() => {
         window.location.href = "/SingleplayerGame/singleplayer.html";
       }, 800);
     }),
-    createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {
+    new Button(width / 2 + 20, height / 2 + 70, 200, 80, "Back", () => {
       currentPage = "gameOptions";
       showGameOptions();
     }),
-    createButtonObj("Leaderboard", width / 2 - 100, height / 2 + 175, 200, 80, () => {
+    new Button(width / 2 - 100, height / 2 + 175, 200, 80, "Leaderboard", () => {
       currentPage = "aslLeaderboard";
       showASLLeaderboard();
     })
   ];
 }
 
-function drawSinglePlayerInstructions() { //Instruction shown
+function drawSinglePlayerInstructions() {
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(28);
   text("\nSurvive by collecting coins. \n\n For each minute, you have to pay a fee. \n\n Failure to do so will make you lose HP.", width / 2, height / 2 - 100);
-  drawButtons();
 }
 
-
 // ---------------- MULTIPLAYER (ASL Pacer)
-function showMultiASLInstruc() { // Button shown
+function showMultiASLInstruc() {
   currentPage = "MultiASLInstruc";
   buttons = [
-    createButtonObj("Play", width / 2 - 220, height / 2 + 70, 200, 80, () => {
-      if (userIsOnline()) {
+    new Button(width / 2 - 220, height / 2 + 70, 200, 80, "Play", () => {
+      if (isOnline()) {
         isFading = true;
         fadeAlpha = 0;
         setTimeout(() => {
           window.location.href = "/MultiplayerPaceGame/multiplayerpace.html";
         }, 800);
       }
-    }),
-    createButtonObj("Back", width / 2 + 20, height / 2 + 70, 200, 80, () => {
+    }, { disabled: offlineMode, tooltip: offlineMode ? "Requires internet connection" : null }),
+    new Button(width / 2 + 20, height / 2 + 70, 200, 80, "Back", () => {
       currentPage = "gameOptions";
       showGameOptions();
     })
   ];
 }
 
-function drawMultiASLInstructions() { // Instructions shown
+function drawMultiASLInstructions() {
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20);
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(28);
   text("\nYou have 60 seconds to spell as many words\n as you can in ASL against others.\n\n Internet is required.", width / 2, height / 2 - 100);
-  drawButtons();
 }
 
-
-
 // ---------------- LEADERBOARDS ----------------
-async function loadConfigAndInitSupabase() { // Load Supabase
-  const response = await fetch('config.json'); // Path to your API KEYS
+async function loadConfigAndInitSupabase() {
+  const response = await fetch('config.json');
   const config = await response.json();
-
   supabaseClient = supabase.createClient(config.supabase.url, config.supabase.anonKey);
-
   console.log('Supabase initialized');
 }
 
-async function fetchLeaderboard() { // Query the Leaderboard
+async function fetchLeaderboard() {
   const { data, error } = await supabaseClient
     .from('ASL-DataBase')
     .select('*')
     .order('Miles', { ascending: false });
-
   if (error) {
     console.error('Error fetching leaderboard:', error);
     return [];
@@ -404,14 +542,14 @@ async function fetchLeaderboard() { // Query the Leaderboard
   return data;
 }
 
-function showASLLeaderboard() { // Show the buttons in the leaderboard page
+function showASLLeaderboard() {
   currentPage = "aslLeaderboard";
   buttons = [
-    createButtonObj("Back", width / 2 - 100, height - 100, 200, 60, () => { showSinglePlayerInstruc(); })
+    new Button(width / 2 - 100, height - 100, 200, 60, "Back", () => { showSinglePlayerInstruc(); })
   ];
 }
 
-function drawASLLeaderboard() { // Show the data of the leaderboard
+function drawASLLeaderboard() {
   fill(0, 180);
   rect(width / 2 - 300, height / 2 - 220, 600, 410, 20);
   textAlign(CENTER, CENTER);
@@ -419,11 +557,18 @@ function drawASLLeaderboard() { // Show the data of the leaderboard
   textSize(36);
   text("ASL Marathon Leaderboard", width / 2, height / 2 - 180);
 
+  // Offline safeguard: show message and skip data list
+  if (offlineMode) {
+    textSize(18);
+    fill(230);
+    text("Offline mode: leaderboard unavailable.", width / 2, height / 2 - 130);
+    return;
+  }
+
   textSize(15);
   let startY = height / 2 - 140;
 
-  // Sort by Miles
-  const sortedData = [...aslLeaderboardData].sort((a, b) => b.Miles - a.Miles).slice(0, 10); // Sort from top to bottom
+  const sortedData = [...aslLeaderboardData].sort((a, b) => b.Miles - a.Miles).slice(0, 10);
   sortedData.forEach((player, index) => {
     if (index === 0) {
       let pulse = map(sin(frameCount * 0.1), -1, 1, 180, 255);
@@ -431,204 +576,66 @@ function drawASLLeaderboard() { // Show the data of the leaderboard
     } else {
       fill(255);
     }
-
-    // Display PlayerName, Miles, and Coins
     text(
-      `${index + 1}. ${player.PlayerName} - ${player.Miles} miles | ${player.Coins} coins`,
+      `${index + 1}. ${player.PlayerName} - ${player.Miles} miles 
+ ${player.Coins} coins`,
       width / 2,
       startY + index * 35
     );
   });
 }
 
-
-
 // ---------------- UTILITIES ----------------
-async function checkCameraAccess() { // See if the camera is on
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    stream.getTracks().forEach(track => track.stop());
-    return true;
-  } catch (err) {
-    console.error("Camera access denied or unavailable:", err);
-    return false;
-  }
-}
-
-function userIsOnline() { // Is the user connected to the internet?
+function drawOnlineStatus() {
+  const online = isOnline();
   let boxWidth = 150;
   let boxHeight = 40;
   let x = 20;
   let y = height - boxHeight - 20;
+
   fill(0, 180);
   rect(x, y, boxWidth, boxHeight, 10);
-  let status = navigator.onLine ? "Online ✅" : "Offline ❌";
+
+  let status = online ? "Online ✅" : "Offline ❌";
   fill(255);
-  textSize(24); // <-- Add this to keep it consistent
+  textSize(24);
   text(status, x + boxWidth / 2, y + boxHeight / 2);
-  return navigator.onLine;
+
+  return online;
 }
 
-
-
-// ---------------- HAND INTERACTION ----------------
-function handleHandInteraction(sx, sy, sw, sh) {
-  // Get the first detected hand
-  const hand = hands[0];
-
-  // Extract key fingertip positions
-  const index = hand.index_finger_tip;
-  const thumb = hand.thumb_tip;
-
-  // Clamp helper to keep values within canvas bounds
-  const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
-
-  // Map original hand coordinates to canvas coordinates
-  const mapX = origX => clamp(((origX - sx) / sw) * width, 0, width);
-  const mapY = origY => clamp(((origY - sy) / sh) * height, 0, height);
-
-  // Convert fingertip positions to canvas space
-  const indexX = mapX(index.x), indexY = mapY(index.y);
-  const thumbX = mapX(thumb.x), thumbY = mapY(thumb.y);
-
-  // Calculate distance between index and thumb (pinch detection)
-  const d = dist(indexX, indexY, thumbX, thumbY);
-
-  // Cursor position is midpoint between thumb and index
-  const x = (indexX + thumbX) / 2, y = (indexY + thumbY) / 2;
-
-  // Define pinch threshold based on canvas width
-  const pinchThreshold = width * 0.036;
-  const isPinching = d < pinchThreshold;
-
-  // Check if cursor is hovering over any button
-  let isHoveringButton = false;
-  buttons.forEach(btn => {
-    if (!btn.hidden && x > btn.x && x < btn.x + btn.w && y > btn.y && y < btn.y + btn.h) {
-      isHoveringButton = true;
-    }
-  });
-
-  // Animate cursor properties based on pinch state
-  cursorRotation = lerp(cursorRotation, isPinching ? 15 : 0, 0.1);
-  cursorScale = lerp(cursorScale, isPinching ? 1.5 : 1.2, 0.1);
-  bounceOffset = isPinching ? sin(frameCount * 0.3) * 4 : 0;
-
-  // Cursor color changes based on interaction state
-  let cursorColor = isPinching ? color('cyan') : isHoveringButton ? color(0) : color(255);
-
-  // Draw custom cursor at calculated position
-  push();
-  translate(x, y + bounceOffset);
-  rotate(radians(cursorRotation));
-  scale(cursorScale);
-  noStroke();
-  fill(cursorColor);
-  rectMode(CENTER);
-  circle(0, 0, 25);
-  pop();
-
-  // Highlight button and trigger action if pinched
-  buttons.forEach(btn => {
-    if (!btn.hidden && x > btn.x && x < btn.x + btn.w && y > btn.y && y < btn.y + btn.h) {
-      highlightButton(btn);
-      if (isPinching && millis() - lastPinchTime > pinchCooldown) {
-        btn.action();
-        lastPinchTime = millis();
-      }
-    }
-  });
-
-  // Update pinch state for next frame
-  lastPinch = isPinching;
+function drawOfflineBanner() {
+  const w = 260, h = 28;
+  const x = width - w - 20;
+  const y = 20;
+  fill(0, 180);
+  rect(x, y, w, h, 8);
+  fill(255, 220, 120);
+  textAlign(CENTER, CENTER);
+  textSize(14);
+  text("Offline Mode – features limited", x + w / 2, y + h / 2);
 }
-
-function drawHandSkeleton(hand, fingers) {
-  // Helper to safely fetch a point and map it to canvas coords
-  const mapPt = (name) => {
-    const pt = hand[name];
-    if (!pt) return null;
-    const x = map(pt.x, 0, video.width, 0, width);
-    const y = map(pt.y, 0, video.height, 0, height);
-    return { x, y };
-  };
-
-  // Draw all visible keypoints
-  for (const name in hand) {
-    const p = mapPt(name);
-    if (!p) continue;
-    noStroke();
-    fill('cyan');
-    ellipse(p.x, p.y, 12, 12);
-  }
-
-  // Draw fingers (mcp → pip → dip → tip)
-  stroke(255);
-  strokeWeight(2);
-  for (const finger in fingers) {
-    const chain = fingers[finger]
-      .map(mapPt)
-      .filter(Boolean); // drop missing points
-    for (let i = 0; i < chain.length - 1; i++) {
-      line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
-    }
-  }
-
-  // Draw palm: chain MCPs and connect wrist to MCPs
-  const palmChainNames = [
-    "thumb_cmc",
-    "index_finger_mcp",
-    "middle_finger_mcp",
-    "ring_finger_mcp",
-    "pinky_finger_mcp",
-  ];
-  const palmChain = palmChainNames.map(mapPt).filter(Boolean);
-  for (let i = 0; i < palmChain.length - 1; i++) {
-    line(palmChain[i].x, palmChain[i].y, palmChain[i + 1].x, palmChain[i + 1].y);
-  }
-
-  const wrist = mapPt("wrist");
-  if (wrist) {
-    for (const mcpName of [
-      "index_finger_mcp",
-      "middle_finger_mcp",
-      "ring_finger_mcp",
-      "pinky_finger_mcp",
-      "thumb_cmc"
-    ]) {
-      const mcp = mapPt(mcpName);
-      if (mcp) line(wrist.x, wrist.y, mcp.x, mcp.y);
-    }
-  }
-}
-
-
-
-
 
 function parseYouTubeVideoId(url) {
   try {
     const u = new URL(url.trim());
     const host = u.hostname.replace(/^www\./, '');
-    // youtu.be/<id>
-    if (host === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] || null;
-    // youtube.com/watch?v=<id>
+    if (host === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] ?? null;
     if (host === 'youtube.com' || host === 'm.youtube.com') {
       if (u.searchParams.has('v')) return u.searchParams.get('v');
-      // /embed/<id> or /shorts/<id>
       const parts = u.pathname.split('/').filter(Boolean);
-      if (parts[0] === 'embed' || parts[0] === 'shorts') return parts[1] || null;
+      if (parts[0] === 'embed' || parts[0] === 'shorts') return parts[1] ?? null;
     }
     return null;
   } catch {
-    // Fallback regex for typical paste cases
-    const m = url.match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{6,})/);
+    const m = url.match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_\-]{6,})/);
     return m ? m[1] : null;
   }
 }
 
 function showMusicUrlControls() {
-  // Create once
+  if (offlineMode) return; // safeguard: do not create/show controls when offline
+
   if (!ytUrlInput) {
     ytUrlInput = createInput('');
     ytUrlInput.attribute('placeholder', 'YouTube URL');
@@ -649,8 +656,8 @@ function showMusicUrlControls() {
     ytUrlLoadBtn.style('border', 'none');
     ytUrlLoadBtn.style('font-size', '16px');
     ytUrlLoadBtn.style('cursor', 'pointer');
-
     ytUrlLoadBtn.mousePressed(() => {
+      if (offlineMode) return; // extra safeguard
       const raw = ytUrlInput.value();
       const id = parseYouTubeVideoId(raw);
       if (!id) {
@@ -659,13 +666,10 @@ function showMusicUrlControls() {
         return;
       }
       if (window.bgMusic?.cue) {
-        window.bgMusic.cue(id);            // cue only (no play)
+        window.bgMusic.cue(id);
         window.bgMusic.setLoopEnabled(true);
-
-        // IMPORTANT: ensure the new video is muted immediately after cueing
         if (window.bgMusic.setMuted) window.bgMusic.setMuted(true);
         if (window.bgMusic.setVolume) window.bgMusic.setVolume(0);
-
         ytUrlLoadBtn.html('Music Loaded!');
         setTimeout(() => ytUrlLoadBtn.html('Load Music'), 2500);
       } else {
@@ -675,18 +679,14 @@ function showMusicUrlControls() {
     });
   }
 
-  // === RIGHT-SIDE POSITIONING (bottom-right) ===
-  const marginRight = 20;   // distance from right edge of the canvas
-  const marginBottom = 4;  // distance from bottom edge of the canvas
-
-  // Start with the input aligned to the right edge
+  // Position bottom-right
+  const marginRight = 20;
+  const marginBottom = 4;
   const inputW = 360;
-  const btnW = 120;       // visual width of button (approx)
+  const btnW = 120;
   const spacing = 20;
-
-  // Compute x so the input sits flush to the right margin
   const inputX = width - marginRight - (inputW + btnW + spacing);
-  const inputY = height - marginBottom - 44; // 44 ≈ input height + a little padding
+  const inputY = height - marginBottom - 44;
 
   ytUrlInput.position(inputX, inputY);
   ytUrlLoadBtn.position(inputX + inputW + spacing, inputY);
@@ -701,38 +701,34 @@ function destroyMusicUrlControls() {
 }
 
 function drawMusicHUD() {
-  // Show a disabled panel until the API is ready
-  const ready = bgMusic && bgMusic.ready;
+  if (offlineMode) return; // safeguard: do not draw HUD when offline
 
+  const ready = bgMusic && bgMusic.ready;
   const p = musicUI;
+
   p.x = width - p.panelW - p.padding;
   p.y = height - p.panelH - p.padding;
 
-  // Panel
   noStroke();
   fill(0, 180);
   rect(p.x, p.y, p.panelW, p.panelH, 12);
 
-  // Compute button rects
-  //Play
+  // Play
   p.playRect.x = p.x + 105;
   p.playRect.y = p.y - 15;
-
   p.playRect.w = p.btnSize;
   p.playRect.h = p.btnSize;
 
-  //Mute
+  // Mute
   p.muteRect.x = p.x + 95 + p.btnSize + 16;
   p.muteRect.y = p.y - 15;
   p.muteRect.w = p.btnSize;
   p.muteRect.h = p.btnSize;
 
-  // Button backgrounds
   fill(ready ? color(255, 255, 255, 220) : color(180, 180, 180, 160));
   rect(p.playRect.x, p.playRect.y, p.playRect.w, p.playRect.h, 8);
   rect(p.muteRect.x, p.muteRect.y, p.muteRect.w, p.muteRect.h, 8);
 
-  // Button labels
   fill(0);
   textAlign(CENTER, CENTER);
   textSize(20);
@@ -741,7 +737,6 @@ function drawMusicHUD() {
   text(playLabel, p.playRect.x + p.playRect.w / 2, p.playRect.y + p.playRect.h / 2);
   text(muteLabel, p.muteRect.x + p.muteRect.w / 2, p.muteRect.y + p.muteRect.h / 2);
 
-  // Hint when not ready
   if (!ready) {
     textSize(12);
     fill(220);
@@ -754,25 +749,27 @@ function pointInRect(px, py, r) {
   return (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h);
 }
 
-
 function tryToggleMusicAt(px, py) {
+  if (offlineMode) return; // safeguard: block interactions when offline
   if (!bgMusic || !bgMusic.ready) return;
+
   const p = musicUI;
 
-  // Play/Pause button
+  // Play/Pause
   if (pointInRect(px, py, p.playRect)) {
     if (bgMusic.isPaused()) {
-      // IMPORTANT: ensure silence before starting playback
       if (bgMusic.setMuted) bgMusic.setMuted(true);
-      if (bgMusic.setVolume) bgMusic.setVolume(0); // in case your facade supports volume
+      if (bgMusic.setVolume) bgMusic.setVolume(0);
       bgMusic.play();
     } else {
       bgMusic.pause();
     }
+    // Ensure visualizer state is updated after toggle
+    updateVisualizerState();
     return;
   }
 
-  // Mute/Unmute button
+  // Mute/Unmute
   if (pointInRect(px, py, p.muteRect)) {
     const willMute = !bgMusic.isMuted();
     bgMusic.setMuted(willMute);
@@ -780,6 +777,18 @@ function tryToggleMusicAt(px, py) {
   }
 }
 
+// ---------------- MOUSE CLICK ----------------
 function mousePressed() {
-  tryToggleMusicAt(mouseX, mouseY);
+  // Music HUD toggles (skip in offline mode)
+  if (!offlineMode) {
+    tryToggleMusicAt(mouseX, mouseY);
+  }
+
+  // Button clicks
+  for (let btn of getVisibleButtons()) {
+    if (btn.isHovered()) {
+      btn.click();
+      return;
+    }
+  }
 }

@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <link rel="stylesheet" href="styles.css" />
@@ -12,13 +13,17 @@
 </head>
 
 <body>
-  <script src="/main.js"></script>
+  <!-- Your sketch -->
+   <script src="./main.js"></script>
 
-  <!-- Hidden YouTube player for background music -->
+  <!-- Hidden YouTube player (playback only; not analyzable) -->
   <div id="yt-music-player" style="width:1px;height:1px;position:absolute;left:-9999px;top:-9999px;"></div>
 
+  <!-- Real media element for analysis and playback of direct audio URLs -->
+  <audio id="ap-audio" crossorigin="anonymous" preload="auto" hidden></audio>
+
   <script>
-    // Load the YouTube IFrame Player API asynchronously (required)  ── docs: IFrame API needs a global onYouTubeIframeAPIReady. [1](https://pub.dev/documentation/youtube_iframe_interop/latest/youtube_iframe_interop/PlayerVars-class.html)
+    // 1) Load the YouTube IFrame API (for YT playback)
     (function loadYTAPI() {
       var tag = document.createElement('script');
       tag.src = "https://www.youtube.com/iframe_api";
@@ -26,71 +31,119 @@
       firstScript.parentNode.insertBefore(tag, firstScript);
     })();
 
-    // Facade used by p5 HUD and menu
+    // 2) bgMusic facade supports TWO modes:
+    //    - "audio": a real <audio> element (analyzable; drives the visualizer)
+    //    - "youtube": hidden iframe (plays, but NOT analyzable)
+    const audioEl = document.getElementById('ap-audio');
+
+    // Internal state
+    let mode = "audio";     // "audio" or "youtube"
+    let ytPlayer = null;
+    let autoLoop = true;
+
+    // Keep flags consistent across modes
+    const state = { ready: false, paused: true, muted: true };
+
+    // -- AUDIO ELEMENT EVENTS (analysis-capable source) --
+    audioEl.addEventListener('loadedmetadata', () => { state.ready = true; });
+    audioEl.addEventListener('canplay', () => { state.ready = true; });
+    audioEl.addEventListener('play', () => { state.paused = false; });
+    audioEl.addEventListener('pause', () => { state.paused = true; });
+    audioEl.addEventListener('ended', () => { if (autoLoop) { audioEl.currentTime = 0; audioEl.play(); } });
+
+    // 3) Facade expected by main.js
     window.bgMusic = {
-      ready: false,
-      paused: true,
-      muted: true,
-      play: () => { },
-      pause: () => { },
-      setMuted: (m) => { },
-      isPaused: () => window.bgMusic.paused,
-      isMuted: () => window.bgMusic.muted,
-      cue: (videoId) => { },           // <-- NEW: load (cue) without playing
-      setLoopEnabled: (on) => { }      // optional: control loop behavior
+      get ready() { return state.ready; },
+      isPaused() { return state.paused; },
+      isMuted() { return state.muted; },
+
+      play() { mode === "audio" ? audioEl.play().catch(() => { }) : ytPlayer?.playVideo(); state.paused = false; },
+      pause() { mode === "audio" ? audioEl.pause() : ytPlayer?.pauseVideo(); state.paused = true; },
+
+      setMuted(m) {
+        state.muted = !!m;
+        if (mode === "audio") {
+          audioEl.muted = state.muted;
+        } else if (ytPlayer) {
+          state.muted ? ytPlayer.mute() : ytPlayer.unMute();
+        }
+      },
+
+      setVolume(percent) {
+        const v = Math.max(0, Math.min(100, Number(percent || 0))) / 100;
+        if (mode === "audio") {
+          audioEl.volume = v;
+        } else if (ytPlayer) {
+          ytPlayer.setVolume(Math.round(v * 100));
+        }
+      },
+
+      setLoopEnabled(on) { autoLoop = !!on; },
+
+      // IMPORTANT: This decides which backend to use:
+      //  - direct audio URL -> uses <audio> (visualizer ON)
+      //  - YouTube URL/ID   -> uses iframe (visualizer OFF; console warns)
+      cue(raw) {
+        const s = String(raw || "").trim();
+        if (!s) return;
+
+        // Try to detect a direct audio URL (analysis-capable)
+        const isAudioUrl = /^(https?:\/\/|\/).+\.(mp3|ogg|wav|m4a)(\?.*)?$/i.test(s);
+        if (isAudioUrl) {
+          mode = "audio";
+          // Ensure crossorigin for analysis (requires server CORS)
+          audioEl.crossOrigin = audioEl.crossOrigin || "anonymous";
+          audioEl.src = s;
+          state.ready = false;
+          audioEl.load(); // will fire canplay/loadedmetadata
+          // Start muted to satisfy autoplay policies in main.js flow
+          audioEl.muted = true;
+          state.muted = true;
+          state.paused = true;
+          return;
+        }
+
+        // Otherwise treat as YouTube (ID or URL)
+        mode = "youtube";
+        if (!ytPlayer) {
+          console.warn('[bgMusic] YouTube selected; visualizer will be disabled (iframe audio is not analyzable).');
+        } else {
+          // If the string looks like a full URL, extract the ID via regex
+          const match = s.match(/(?:v=|\/embed\/|youtu\.be\/|\/shorts\/)([A-Za-z0-9_\-]{6,})/);
+          const id = match ? match[1] : s;
+          ytPlayer.cueVideoById(id);
+          state.paused = true;
+          state.muted = true;
+          ytPlayer.mute();
+        }
+      },
+
+      // main.js uses this to build the Web Audio graph; return <audio> only in audio mode
+      getMediaElement() { return mode === "audio" ? audioEl : null; }
     };
 
-    var ytMusicPlayer = null;
-    var autoLoop = true; // loop when a video ends (for later-cued videos too)
-
+    // 4) YouTube player init (playback only; not analyzable)
     function onYouTubeIframeAPIReady() {
-      const initialId = ""; // harmless default; will be replaced by user cue
-      ytMusicPlayer = new YT.Player('yt-music-player', {
+      ytPlayer = new YT.Player('yt-music-player', {
         height: '200', width: '200',
-        videoId: initialId,
-        playerVars: {
-          autoplay: 0,         // <-- DO NOT autoplay
-          controls: 0,
-          rel: 0,
-          modestbranding: 1,
-          playsinline: 1,
-          loop: 1,             // loop requires playlist matching the video ID
-          playlist: initialId
-        },
+        videoId: "", // harmless default
+        playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, playsinline: 1 },
         events: {
           onReady: function (e) {
-            e.target.mute(); // start muted (policy friendly) [2](https://www.encodedna.com/javascript/youtube-api-embed-video-with-mute-sound-setvolume-onstatechange-event.htm)
-            // remain paused until user presses Play
-            window.bgMusic.ready = true;
-            window.bgMusic.paused = true;
-            window.bgMusic.muted = true;
-
-            window.bgMusic.play = () => { e.target.playVideo(); window.bgMusic.paused = false; };
-            window.bgMusic.pause = () => { e.target.pauseVideo(); window.bgMusic.paused = true; };
-            window.bgMusic.setMuted = (m) => {
-              if (m) e.target.mute(); else e.target.unMute();
-              window.bgMusic.muted = m;
-            };
-            // Cue a new video ID (load thumbnail/buffer but don't play)  ── uses cueVideoById. [1](https://pub.dev/documentation/youtube_iframe_interop/latest/youtube_iframe_interop/PlayerVars-class.html)
-            window.bgMusic.cue = (videoId) => {
-              if (!videoId) return;
-              e.target.cueVideoById(videoId);
-              window.bgMusic.paused = true;
-              window.bgMusic.muted = true;
-            };
-            window.bgMusic.setLoopEnabled = (on) => { autoLoop = !!on; };
+            e.target.mute(); // policy-friendly
+            state.ready = true;
+            state.paused = true;
+            state.muted = true;
           },
           onStateChange: function (ev) {
-            if (ev.data === YT.PlayerState.PLAYING) window.bgMusic.paused = false;
-            if (ev.data === YT.PlayerState.PAUSED) window.bgMusic.paused = true;
-            if (ev.data === YT.PlayerState.ENDED && autoLoop) {
-              // For later-cued single videos, restart to mimic loop  ── common workaround when playlist param can't change post-init. [5](https://stackoverflow.com/questions/70719678/html5-video-autoplay-with-sound-unmuted)
-              ytMusicPlayer.playVideo();
-            }
+            if (ev.data === YT.PlayerState.PLAYING) state.paused = false;
+            if (ev.data === YT.PlayerState.PAUSED) state.paused = true;
+            if (ev.data === YT.PlayerState.ENDED && autoLoop) ytPlayer.playVideo();
           }
         }
       });
     }
+    window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
   </script>
 </body>
 </html>

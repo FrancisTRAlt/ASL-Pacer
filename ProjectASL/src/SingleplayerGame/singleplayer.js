@@ -1,4 +1,20 @@
-// ---------------- GLOBAL STATE ----------------
+// ------------------------------
+// OFFLINE MODE SAFEGUARDS (refs: main.js style)
+// ------------------------------
+// Set NET_TEST_OVERRIDE to:
+//   null -> use real navigator.onLine (default)
+//   true -> force ONLINE (testing)
+//   false -> force OFFLINE (testing)
+let NET_TEST_OVERRIDE = null;
+function isOnline() {
+  return (NET_TEST_OVERRIDE === null) ? navigator.onLine : !!NET_TEST_OVERRIDE;
+}
+// Track offline mode at runtime (auto-updates in draw())
+let offlineMode = false;
+
+// ------------------------------
+// GLOBAL STATE
+// ------------------------------
 let video, handPose, hands = [];
 let classifier;
 let classification = "";
@@ -6,8 +22,8 @@ let confidence = 0;
 let lastClassifyTime = 0;
 const classifyInterval = 200; // ms
 let lastMatchTime = 0;
-let isClassifying = false;   // prevent overlapping classify calls
-let finalizing = false;      // guard against double finalization
+let isClassifying = false; // prevent overlapping classify calls
+let finalizing = false; // guard against double finalization
 let connections;
 const fingers = {
   thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
@@ -16,15 +32,13 @@ const fingers = {
   ring: ["ring_finger_mcp", "ring_finger_pip", "ring_finger_dip", "ring_finger_tip"],
   pinky: ["pinky_finger_mcp", "pinky_finger_pip", "pinky_finger_dip", "pinky_finger_tip"]
 };
-
 // Arduino Connections
 let arduinoConnected = false;
 let arduinoMessage = "";
 let arduinoMessageTime = 0;
 let arduinoPort = null; // Track the port globally
-let arduinoReader = null;      // track the active reader globally
-let stopArduinoRead = false;   // signal to stop the read loop
-
+let arduinoReader = null; // track the active reader globally
+let stopArduinoRead = false; // signal to stop the read loop
 // Game states
 let currentState = "menu"; // "menu", "countdown", "checkpoint", "game", "gameover"
 let countdownStartTime = null;
@@ -34,38 +48,30 @@ let playerScore = 0;
 let coinsPaid = 0;
 let pausedTime = 0; // total time paused
 let checkpointStartTime = 0;
-
 //Checkpoints
 let checkpointsReached = 0;
 let checkpointInterval = 60000; // 1 minute
 let nextCheckpointElapsed = null
-
 // Word game state
 let words = [];
 let currentWord = "";
 let currentIndex = 0;
-
 let letterSpeeds = []; // Track time per letter
-let wordSpeeds = [];   // Track average time per word
+let wordSpeeds = []; // Track average time per word
 let letterStartTime = 0; // Start time for current letter
-
 // Buttons
 let buttons = [];
-
 // PLAYER STATE
 let player;
 let usernameInput;
 // HUD style constants
 let HUD;
-
-
 //Decoration Ship
 let shipX = -100; // start off-screen
-let shipY = 100;  // vertical position
+let shipY = 100; // vertical position
 let shipSpeed = 5;
 let lastShipSpawn = 0;
 let shipVisible = false;
-
 // Database
 let supabaseClient;
 async function initSupabase() {
@@ -75,30 +81,29 @@ async function initSupabase() {
   console.log('Supabase initialized in singleplayer');
 }
 
-
-
-// ---------------- PRELOAD ----------------
+// ------------------------------
+// PRELOAD
+// ------------------------------
 function preload() {
   handPose = ml5.handPose({ flipped: true });
   words = loadStrings("../lib/words_alpha.txt");
 }
 
-
-
-// ---------------- SETUP ----------------
+// ------------------------------
+// SETUP
+// ------------------------------
 function setup() {
   createCanvas(800, 600);
   player = {
-    name: "",        // will be set in setup()
-    health: 50,     // UI only for now
+    name: "", // will be set in setup()
+    health: 50, // UI only for now
     maxHealth: 50,
-    coins: 0         // UI only for now
+    coins: 0 // UI only for now
   };
   usernameInput = createInput(player.name);
   usernameInput.position((width - usernameInput.width) / 2 - 7, height / 2 - 80);
   usernameInput.size(230);
   usernameInput.hide;
-
   // Add styling for Arduino page input
   usernameInput.style('font-size', '20px');
   usernameInput.style('padding', '5px');
@@ -109,7 +114,6 @@ function setup() {
   usernameInput.style('text-align', 'center');
   usernameInput.style('outline', 'none'); // Removes default focus outline
   usernameInput.hide();
-
   // HUD style constants
   HUD = {
     x: 30,
@@ -123,12 +127,10 @@ function setup() {
     spacing: 12
   };
   player.name = "Player" + floor(random(1000, 9999));
-
   // Webcam setup
   video = createCapture(VIDEO, { flipped: true });
   video.size(800, 600);
   video.hide();
-
   // Get our ML model
   ml5.setBackend("webgl");
   // Neural network setup
@@ -140,29 +142,51 @@ function setup() {
     weights: "../ml5Model/model.weights.bin",
   };
   classifier.load(modelDetails, modelLoaded);
-
-
   handPose.detectStart(video, gotHands);
   connections = handPose.getConnections();
-
   // Initialize first word
   currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
-  letterStartTime = millis();  // start timing the first letter
+  letterStartTime = millis(); // start timing the first letter
 
-  // If we are online, use the database
-  if (navigator.onLine) {
-    initSupabase();
+  // --- Offline initialization & DB safeguard ---
+  offlineMode = !isOnline();
+  if (!offlineMode) {
+    initSupabase().catch(e => {
+      console.warn("Supabase init failed:", e);
+      // remain usable even if DB fails
+    });
   } else {
     console.warn("Offline: Supabase will not be initialized.");
   }
 }
 
-
-
-// ---------------- DRAW ----------------
+// ------------------------------
+// DRAW
+// ------------------------------
 function draw() {
   drawSpaceBackground();
+
+  // --- Refresh offline state every frame (handles mid-session changes or NET_TEST_OVERRIDE) ---
+  const nowOffline = !isOnline();
+  if (nowOffline !== offlineMode) {
+    offlineMode = nowOffline;
+    if (!offlineMode) {
+      // Came back online: lazily initialize Supabase if not ready
+      if (!supabaseClient) {
+        initSupabase().catch(e => console.warn("Supabase re-init failed:", e));
+      }
+    } else {
+      // Went offline: optional clean-up; keep playing locally
+      // supabaseClient can remain; we will guard its usage
+      console.log("Entered Offline Mode – network features disabled.");
+    }
+  }
+
+  // Online/Offline HUD
+  drawOnlineStatus();
+  if (offlineMode) drawOfflineBanner();
+
   // Update button visibility based on state
   if (currentState === "menu") {
     drawMenu();
@@ -177,6 +201,7 @@ function draw() {
   } else if (currentState === "gameover") {
     drawGameOver();
   }
+
   if (currentState !== "arduino" && usernameInput) {
     usernameInput.hide();
   }
@@ -188,9 +213,9 @@ function draw() {
   text(arduinoConnected ? "Arduino Connected" : "Arduino Disconnected", width - 20, height - 20);
 }
 
-
-
-// ---------------- MAIN MENU ----------------
+// ------------------------------
+// MAIN MENU
+// ------------------------------
 function drawSpaceBackground() {
   background(0); // Black space
   noStroke();
@@ -212,51 +237,44 @@ function drawSpaceBackground() {
     ellipse(s.x, s.y, s.size, s.size);
   }
 }
-
 function drawMenu() {
   buttons.forEach(btn => {
     btn.visible = false;
   });
-
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
   text("Singleplayer", width / 2, height / 2 - 150);
-
   drawHUD(); //Remove later
-
   // Show
   buttons.filter(btn => ["Start Game", "Exit", "Arduino"].includes(btn.label))
     .forEach(btn => {
       btn.visible = true;
-      btn.show();          // Draw them
+      btn.show(); // Draw them
     });
 }
 
-
-
-// ---------------- ARDUINO SETUP ----------------
+// ------------------------------
+// ARDUINO SETUP
+// ------------------------------
 async function listenToArduino() {
   if (arduinoPort && arduinoPort.readable) {
-    stopArduinoRead = false;                     // allow reading
+    stopArduinoRead = false; // allow reading
     const reader = arduinoPort.readable.getReader();
-    arduinoReader = reader;                      // keep a reference
+    arduinoReader = reader; // keep a reference
     const decoder = new TextDecoder();
     let buffer = "";
-
     try {
       while (!stopArduinoRead) {
         const { value, done } = await reader.read();
         if (done) break; // reader.cancel() will cause done=true
         buffer += decoder.decode(value);
-
         // Process complete lines
         let nl;
         while ((nl = buffer.indexOf('\n')) !== -1) {
           const line = buffer.slice(0, nl).trim();
           buffer = buffer.slice(nl + 1);
           if (!line) continue;
-
           console.log("Arduino says:", line);
           if (currentState === "checkpoint" && line.includes("BUTTON PRESSED!")) {
             payCoinLogic();
@@ -273,20 +291,17 @@ async function listenToArduino() {
     }
   }
 }
-
 function drawArduinoPage() {
   buttons.forEach(btn => { btn.visible = false; });
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(64);
   text("Arduino Setup", width / 2, height / 2 - 150);
-
   // Show message only if within 5 seconds
   if (arduinoMessage && millis() - arduinoMessageTime < 5000) {
     textSize(32);
     text(arduinoMessage, width / 2, height / 2);
   }
-
   if (arduinoConnected) {
     usernameInput.show();
     usernameInput.position((width - usernameInput.width) / 2 - 7, height / 2 - 80);
@@ -303,9 +318,9 @@ function drawArduinoPage() {
   }
 }
 
-
-
-// ---------------- COUNTDOWN ----------------
+// ------------------------------
+// COUNTDOWN
+// ------------------------------
 function startCountdown() {
   currentState = "countdown";
   countdownStartTime = millis();
@@ -316,14 +331,11 @@ function drawCountdown() {
   buttons.forEach(btn => {
     btn.visible = false;
   });
-
   let elapsed = millis() - countdownStartTime;
   let remaining = 3 - floor(elapsed / 1000);
-
   textAlign(CENTER, CENTER);
   textSize(128);
   fill(255);
-
   if (remaining >= 0) {
     text(remaining, width / 2, height / 2);
   } else {
@@ -332,14 +344,13 @@ function drawCountdown() {
   }
 }
 
-
-
-// ---------------- GAME ----------------
+// ------------------------------
+// GAME
+// ------------------------------
 function drawGame() {
   buttons.forEach(btn => {
     btn.visible = false;
   });
-
   // --- Fallback: if all letters are complete but finalization didn't run, run it here
   if (currentIndex >= currentWord.length) {
     finalizeWord();
@@ -354,15 +365,13 @@ function drawGame() {
 
   // --- Endless checkpoint logic driven by elapsed game time ---
   let elapsed = millis() - startTime - pausedTime;
-
   // Initialize the first checkpoint threshold to 1 minute of elapsed time
   if (!nextCheckpointElapsed) nextCheckpointElapsed = checkpointInterval; // 60000
-
   // Trigger when the elapsed game time crosses the threshold
   if (elapsed >= nextCheckpointElapsed) {
     currentState = "checkpoint";
     checkpointsReached++;
-    checkpointStartTime = millis();      // record *absolute* start to accumulate pausedTime later
+    checkpointStartTime = millis(); // record *absolute* start to accumulate pausedTime later
     nextCheckpointElapsed += checkpointInterval; // schedule next at +1 min of elapsed time
     return;
   }
@@ -387,7 +396,6 @@ function drawGame() {
   // UI
   fill("black");
   rect(width / 2 - 350, height / 2 + 20, 700, 350, 20);
-
   let boxCenterX = width / 2;
   let boxCenterY = height / 2 + 190;
 
@@ -397,11 +405,9 @@ function drawGame() {
   let spacing = 70;
   let totalWidth = (currentWord.length - 1) * spacing;
   let startX = boxCenterX - totalWidth / 2;
-
   for (let i = 0; i < currentWord.length; i++) {
     let letter = currentWord[i];
     let xPos = startX + i * spacing;
-
     if (i < currentIndex) {
       let glowStrength = abs(sin(frameCount * 0.1)) * 20;
       let glowColor = color(0, 255, 0, glowStrength);
@@ -412,7 +418,6 @@ function drawGame() {
       noStroke();
       fill(255);
     }
-
     text(letter, xPos, boxCenterY);
   }
   strokeWeight(0);
@@ -422,11 +427,9 @@ function drawGame() {
   let minutes = floor(seconds / 60);
   seconds = seconds % 60;
   let timerText = nf(minutes, 2) + ":" + nf(seconds, 2);
-
   textSize(32);
   fill(255);
   text(timerText, boxCenterX - 280, boxCenterY - 120);
-
 
   let now = millis();
   if (now - lastShipSpawn > 10000) { // every 10 seconds
@@ -435,38 +438,29 @@ function drawGame() {
     lastShipSpawn = now;
   }
 
-
   // Make the ship fly
   if (shipVisible) {
     shipX += shipSpeed;
-
     // Ship body
     fill(50, 150, 255); // main color
     rect(shipX, shipY, 80, 30, 8); // rounded body
-
     // Cockpit
     fill(200, 255, 255);
     ellipse(shipX + 20, shipY + 15, 20, 15);
-
     // Wings
     fill(100, 180, 255);
     triangle(shipX + 10, shipY - 10, shipX + 40, shipY, shipX + 10, shipY + 10); // top wing
     triangle(shipX + 10, shipY + 30, shipX + 40, shipY + 30, shipX + 10, shipY + 40); // bottom wing
-
     // Tail fins
     fill(80, 130, 255);
     rect(shipX - 5, shipY + 5, 15, 20);
-
     // Exhaust flames
     fill(random(200, 255), random(100, 200), 0);
     triangle(shipX - 20, shipY + 10, shipX - 5, shipY + 5, shipX - 5, shipY + 25);
-
     // Hide when off-screen
     if (shipX > width + 100) shipVisible = false;
   }
-
 }
-
 function drawCheckpoint() {
   buttons.forEach(btn => { btn.visible = false; });
   background(0);
@@ -474,16 +468,13 @@ function drawCheckpoint() {
   fill(255);
   textSize(48);
   text(`Checkpoint ${checkpointsReached}`, width / 2, height / 2 - 150);
-
   let requiredCoins = 5 + (checkpointsReached - 1) * 2;
   textSize(32);
   text(`Need ${requiredCoins} coins to proceed safely`, width / 2, height / 2 - 60);
-
   // Show progress
   textSize(28);
   fill(200, 255, 200);
   text(`Paid: ${coinsPaid}/${requiredCoins}`, width / 2, height / 2 + 20);
-
   drawHUD();
 
   // If Arduino connected, show message instead of button
@@ -497,7 +488,6 @@ function drawCheckpoint() {
       .forEach(btn => { btn.visible = true; btn.show(); });
   }
 }
-
 function applyPenalty(coinDebt) {
   let damage = checkpointsReached * (coinDebt); // Cal based on the current checkpoint and the user's debt on that checkpoint
   player.health -= damage;
@@ -509,12 +499,11 @@ function applyPenalty(coinDebt) {
   }
 }
 
-
-
-// ---------------- GAME OVER ----------------
+// ------------------------------
+// GAME OVER
+// ------------------------------
 async function endGame() {
   currentState = "gameover";
-
   // Normalize name: trim & ensure not empty
   // Store the player data to the database
   const normalizedName = String(player.name ?? "").trim();
@@ -528,20 +517,30 @@ async function endGame() {
     Coins: player.coins,
   };
 
-  if (navigator.onLine) { // We can upload to database if we are online
+  // --- Offline-safe DB write flow (mirrors main.js guards) ---
+  if (!offlineMode) { // We can upload to database if we are online
     try {
+      // Ensure supabaseClient exists; if not, try to init (could have started offline)
+      if (!supabaseClient) {
+        await initSupabase().catch(e => {
+          console.error('Supabase init failed during endGame:', e);
+        });
+      }
+      if (!supabaseClient) {
+        console.warn("Online but Supabase not initialized; skipping DB write.");
+        return;
+      }
+
       // 1) Check if a record with this PlayerName exists (exact match, case-sensitive)
       const { data: existing, error: selectError } = await supabaseClient
         .from('ASL-DataBase')
         .select('PlayerName')
         .eq('PlayerName', normalizedName)
         .limit(1); // defensive: at most one row
-
       if (selectError) {
         console.error('Error checking username:', selectError);
         return;
       }
-
       if (existing && existing.length > 0) {
         // 2) Update matched record; chain .select() to see returned row
         const { data, error } = await supabaseClient
@@ -549,7 +548,6 @@ async function endGame() {
           .update(gameData)
           .eq('PlayerName', normalizedName)
           .select();
-
         if (error) {
           console.error('Error updating game data:', error);
         } else {
@@ -561,7 +559,6 @@ async function endGame() {
           .from('ASL-DataBase')
           .insert([gameData])
           .select();
-
         if (error) {
           console.error('Error inserting game data:', error);
         } else {
@@ -572,10 +569,9 @@ async function endGame() {
       console.error('Unexpected error:', err);
     }
   } else {
-    console.warn("Offline.");
+    console.warn("Offline mode: skipping DB write.");
   }
 }
-
 function drawGameOver() {
   buttons.forEach(btn => {
     btn.visible = false;
@@ -584,31 +580,27 @@ function drawGameOver() {
   fill(255);
   textSize(64);
   text("Game Over!", width / 2, height / 2 - 100);
-
   textSize(32);
   text(`Username: ${player.name}`, width / 2, height / 2);
   text(`Words Completed: ${playerScore}`, width / 2, height / 2 + 60);
-
   // Optional: show final HUD snapshot
   drawHUD();
-
   // Show
   buttons.filter(btn => ["Restart", "Main Menu"].includes(btn.label))
     .forEach(btn => { btn.visible = true; btn.show(); });
 }
-
 function restartGame() {
   playerScore = 0;
   player.health = player.maxHealth; // Reset HP
-  player.coins = 0;                 // Reset coins
+  player.coins = 0; // Reset coins
   currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
   startCountdown();
 }
 
-
-
-// ---------------- BUTTON CLASS ----------------
+// ------------------------------
+// BUTTON CLASS
+// ------------------------------
 class Button {
   constructor(x, y, w, h, label, callback) {
     this.x = x;
@@ -619,7 +611,6 @@ class Button {
     this.callback = callback;
     this.visible = true; // New property
   }
-
   show() {
     if (!this.visible) return;
     fill(this.isHovered() ? color(100, 150, 255) : 80);
@@ -629,13 +620,11 @@ class Button {
     textSize(24);
     text(this.label, this.x + this.w / 2, this.y + this.h / 2);
   }
-
   isHovered() {
     return this.visible &&
       mouseX > this.x && mouseX < this.x + this.w &&
       mouseY > this.y && mouseY < this.y + this.h;
   }
-
   click() {
     if (this.visible && this.isHovered()) {
       this.callback();
@@ -643,13 +632,12 @@ class Button {
   }
 }
 
-
-
-// ---------------- MOUSE CLICK ----------------
+// ------------------------------
+// MOUSE CLICK
+// ------------------------------
 function getVisibleButtons() {
   return buttons.filter(btn => btn.visible);
 }
-
 function mousePressed() {
   for (let btn of getVisibleButtons()) {
     if (btn.isHovered()) {
@@ -659,40 +647,34 @@ function mousePressed() {
   }
 }
 
-
-
-// ---------------- CALLBACKS ----------------
+// ------------------------------
+// CALLBACKS
+// ------------------------------
 function gotHands(results) {
   hands = results;
 }
-
 async function gotClassification(results) {
   // Guard: empty or invalid results
   if (!results || results.length === 0) return;
-
   const sum = results.reduce((acc, r) => acc + (r?.confidence ?? 0), 0);
   if (!isFinite(sum) || sum <= 0) return; // nothing meaningful to use
-
   const normalized = results
-    .map(r => ({ label: r.label, confidence: (r.confidence || 0) / sum }))
+    .map(r => ({ label: r.label, confidence: (r.confidence ?? 0) / sum }))
     .sort((a, b) => b.confidence - a.confidence);
-
   const top = normalized[0];
   if (!top || !isFinite(top.confidence)) return;
 
   // Require confidence threshold
   if (top.confidence >= 0.6) {
     const now = millis();
-
     // If word already complete (race condition), finalize immediately
     if (currentIndex >= currentWord.length) {
       finalizeWord();
       return;
     }
-
     const expectedLetter = currentWord[currentIndex];
     // If your model returns lowercase, you can compare case-insensitively:
-    // if ((top.label || '').toUpperCase() === expectedLetter)
+    // if ((top.label ?? '').toUpperCase() === expectedLetter)
     if (top.label === expectedLetter && (now - lastMatchTime > 500)) {
       // Accept this letter
       currentIndex++;
@@ -714,33 +696,27 @@ async function gotClassification(results) {
 function modelLoaded() {
   buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Start Game", () => startCountdown()));
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Exit", () => window.location.href = "../index.html"));
-
   // Add restart button for game over
   buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Restart", () => restartGame()));
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Main Menu", () => {
     currentState = "menu";
     playerScore = 0;
     player.health = player.maxHealth; // Reset HP
-    player.coins = 0;                 // Reset coins
+    player.coins = 0; // Reset coins
     currentWord = random(words).toUpperCase().replace(/\s+/g, '');
     currentIndex = 0;
   }));
-
-
   buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Arduino", () => {
     currentState = "arduino";
   }));
   buttons.push(new Button(width / 2 - 100, height / 2 + 40, 200, 60, "Save Username", async () => {
-
     let newName = usernameInput.value().trim();
-
     if (newName.length > 10) {
       arduinoMessage = "Username too long! Max 10 characters.";
       arduinoMessageTime = millis();
       console.log(arduinoMessage);
       return; // Stop execution
     }
-
     player.name = newName;
     arduinoMessage = "Username saved!";
     arduinoMessageTime = millis();
@@ -785,14 +761,12 @@ function modelLoaded() {
           arduinoMessage = "Connected!";
           arduinoMessageTime = millis();
           currentState = "arduino";
-
           // Compute current average letter speed (or 0 if none yet)
           let avgLetterSpeed = 0;
           if (wordSpeeds.length > 0) {
             let sum = wordSpeeds.reduce((a, b) => a + b, 0);
             avgLetterSpeed = (sum / wordSpeeds.length) / 1000; // ms to s
           }
-
           // Send player name and avg speed to Arduino
           if (arduinoPort && arduinoPort.writable) {
             try {
@@ -808,19 +782,14 @@ function modelLoaded() {
           listenToArduino(); //Listen for button presses
         }).catch(err => {
           arduinoConnected = false;
-
           player.name = "Player" + floor(random(1000, 9999));
           usernameInput.value(player.name);
           usernameInput.hide();
-
           arduinoMessage = "Connection failed or wrong device.";
           arduinoMessageTime = millis();
           console.error(err);
-
         });
-
       arduinoPort = port; // Save globally
-
     } else {
       arduinoMessage = "Web Serial not supported.";
       arduinoMessageTime = millis();
@@ -832,7 +801,6 @@ function modelLoaded() {
       arduinoMessageTime = millis();
       return;
     }
-
     try {
       // 1) Send a friendly goodbye (optional)
       if (arduinoPort.writable) {
@@ -841,12 +809,11 @@ function modelLoaded() {
         await writer.write(new TextEncoder().encode(message));
         writer.releaseLock();
       }
-
       // 2) Stop the read loop and cancel the *same* reader
       stopArduinoRead = true;
       if (arduinoReader) {
         try {
-          await arduinoReader.cancel();            // causes read() to resolve with done=true
+          await arduinoReader.cancel(); // causes read() to resolve with done=true
         } catch (e) {
           // Some browsers throw when canceling an already-stalled reader; safe to ignore
           console.debug("Reader cancel:", e?.message ?? e);
@@ -854,10 +821,8 @@ function modelLoaded() {
         try { arduinoReader.releaseLock(); } catch { }
         arduinoReader = null;
       }
-
       // 3) Now close the port
       await arduinoPort.close();
-
       // 4) Reset state/UI
       arduinoConnected = false;
       arduinoPort = null;
@@ -865,14 +830,12 @@ function modelLoaded() {
       arduinoMessageTime = millis();
       currentState = "arduino";
       console.log("Arduino disconnected successfully.");
-
     } catch (err) {
       // Common messages: "NetworkError when attempting to fetch resource."
       // or "InvalidStateError: Cannot close a locked port." if reader wasn’t released
       console.error("Error disconnecting:", err);
       arduinoMessage = `Error disconnecting: ${err?.message ?? err}`;
       arduinoMessageTime = millis();
-
       // Fallback: ensure state isn’t stuck
       try {
         if (arduinoPort) await arduinoPort.close();
@@ -882,56 +845,45 @@ function modelLoaded() {
       arduinoReader = null;
     }
   }));
-
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Back", () => {
     currentState = "menu";
   }));
-
-
   buttons.push(new Button(width / 2 - 120, height / 2 + 120, 240, 60, "Pay 1 Coin", () => {
     payCoinLogic();
   }));
 }
 
-
-
-// ---------------- HAND DATA ----------------
+// ------------------------------
+// HAND DATA
+// ------------------------------
 function flattenHandData() {
   if (!hands[0]) return [];
-
   let hand = hands[0];
   let xs = hand.keypoints.map(k => k.x);
   let ys = hand.keypoints.map(k => k.y);
   let minX = Math.min(...xs), maxX = Math.max(...xs);
   let minY = Math.min(...ys), maxY = Math.max(...ys);
-
   let handData = [];
-
   for (let i = 0; i < hand.keypoints.length; i++) {
     let keypoint = hand.keypoints[i];
     let normX = (keypoint.x - minX) / (maxX - minX);
     let normY = (keypoint.y - minY) / (maxY - minY);
     handData.push(normX, normY);
   }
-
   for (let j = 0; j < connections.length; j++) {
     let pointAIndex = connections[j][0];
     let pointBIndex = connections[j][1];
     let pointA = hand.keypoints[pointAIndex];
     let pointB = hand.keypoints[pointBIndex];
-
     let dx = (pointB.x - pointA.x) / (maxX - minX);
     let dy = (pointB.y - pointA.y) / (maxY - minY);
     let distance = Math.sqrt(dx * dx + dy * dy);
     let angle = Math.atan2(dy, dx) / Math.PI;
-
     handData.push(distance);
     handData.push(angle);
   }
-
   return handData;
 }
-
 function drawHandSkeleton(hand, fingers) {
   // Helper to safely fetch a point and map it to canvas coords
   const mapPt = (name) => {
@@ -941,7 +893,6 @@ function drawHandSkeleton(hand, fingers) {
     const y = map(pt.y, 0, video.height, 0, height);
     return { x, y };
   };
-
   // Draw all visible keypoints
   for (const name in hand) {
     const p = mapPt(name);
@@ -950,7 +901,6 @@ function drawHandSkeleton(hand, fingers) {
     fill('cyan');
     ellipse(p.x, p.y, 12, 12);
   }
-
   // Draw fingers (mcp → pip → dip → tip)
   stroke(255);
   strokeWeight(2);
@@ -962,7 +912,6 @@ function drawHandSkeleton(hand, fingers) {
       line(chain[i].x, chain[i].y, chain[i + 1].x, chain[i + 1].y);
     }
   }
-
   // Draw palm: chain MCPs and connect wrist to MCPs
   const palmChainNames = [
     "thumb_cmc",
@@ -975,7 +924,6 @@ function drawHandSkeleton(hand, fingers) {
   for (let i = 0; i < palmChain.length - 1; i++) {
     line(palmChain[i].x, palmChain[i].y, palmChain[i + 1].x, palmChain[i + 1].y);
   }
-
   const wrist = mapPt("wrist");
   if (wrist) {
     for (const mcpName of [
@@ -990,7 +938,6 @@ function drawHandSkeleton(hand, fingers) {
     }
   }
 }
-
 function drawHUD() {
   // Panel background
   noStroke();
@@ -1021,23 +968,21 @@ function drawHUD() {
   const barY = HUD.y + HUD.height + HUD.spacing;
   const barW = HUD.width;
   const barH = HUD.height;
-
   // Background bar
   fill(20, 20, 20, 220);
   rect(barX, barY, barW, barH, 6);
-
   // Health fraction
   const frac = constrain(player.health / player.maxHealth, 0, 1);
 
   // Bar color (green → yellow → red)
   const healthColor = lerpColor(
-    color(255, 0, 0),       // red
-    color(255, 255, 0),     // yellow
+    color(255, 0, 0), // red
+    color(255, 255, 0), // yellow
     frac < 0.5 ? frac * 2 : 1
   );
   const healthColor2 = lerpColor(
-    color(255, 255, 0),     // yellow
-    color(0, 200, 0),       // green
+    color(255, 255, 0), // yellow
+    color(0, 200, 0), // green
     frac < 0.5 ? 0 : (frac - 0.5) * 2
   );
   const blended = frac < 0.5 ? healthColor : healthColor2;
@@ -1063,22 +1008,19 @@ function drawHUD() {
   textAlign(LEFT, CENTER);
   text(`🪙 Coins: ${player.coins}`, coinTextX, coinTextY);
 }
-
 function resetWord() {
   currentWord = random(words).toUpperCase().replace(/\s+/g, '');
   currentIndex = 0;
   letterStartTime = millis(); // Start timing first letter
 }
-
 function finalizeWord() {
-  if (finalizing) return;      // guard against multiple triggers in same frame
+  if (finalizing) return; // guard against multiple triggers in same frame
   finalizing = true;
 
   // Compute and store average letter speed safely
   const sum = letterSpeeds.reduce((a, b) => a + b, 0);
   const count = Math.max(letterSpeeds.length, 1);
   const avg = sum / count;
-
   if (isFinite(avg)) {
     wordSpeeds.push(avg);
     console.log(`Average word signing speed: ${(avg / 1000).toFixed(2)} s`);
@@ -1112,7 +1054,6 @@ function finalizeWord() {
   resetWord(); // sets currentWord/currentIndex and letterStartTime
   finalizing = false;
 }
-
 function payCoinLogic() {
   let requiredCoins = 5 + (checkpointsReached - 1) * 2;
   if (player.coins > 0) {
@@ -1130,4 +1071,34 @@ function payCoinLogic() {
     console.log("No coins left! Applying penalty...");
     applyPenalty(requiredCoins - coinsPaid);
   }
+}
+
+// ------------------------------
+// ONLINE STATUS / OFFLINE BANNER (UI mirrors main.js)
+// ------------------------------
+function drawOnlineStatus() {
+  const online = isOnline();
+  let boxWidth = 150;
+  let boxHeight = 40;
+  let x = 20;
+  let y = height - boxHeight - 20;
+  fill(0, 180);
+  rect(x, y, boxWidth, boxHeight, 10);
+  let status = online ? "Online ✅" : "Offline ❌";
+  fill(255);
+  textSize(24);
+  textAlign(CENTER, CENTER);
+  text(status, x + boxWidth / 2, y + boxHeight / 2);
+  return online;
+}
+function drawOfflineBanner() {
+  const w = 260, h = 28;
+  const x = width - w - 20;
+  const y = 20;
+  fill(0, 180);
+  rect(x, y, w, h, 8);
+  fill(255, 220, 120);
+  textAlign(CENTER, CENTER);
+  textSize(14);
+  text("Offline Mode – features limited", x + w / 2, y + h / 2);
 }

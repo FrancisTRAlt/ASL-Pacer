@@ -10,13 +10,18 @@ A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js
 
 
 # App Demo
-TBD
-### Single-Player
-#### Arduino Connection
-#### Arduino use
 
-### Multiplayer
+## Main Menu
+https://github.com/user-attachments/assets/86e27650-b00f-414e-a5cd-5093e2e358ac
+
+## Single-Player
+https://github.com/user-attachments/assets/b50881c0-450b-4c1c-bb3d-7791f239944b
+
+## Multiplayer
 This uses MQTT [mosquitto](https://mosquitto.org/) to perform online connectivity.
+
+https://github.com/user-attachments/assets/449b070f-d31e-435b-9ed7-d71f468c39ff
+
 
 
 # Get Started

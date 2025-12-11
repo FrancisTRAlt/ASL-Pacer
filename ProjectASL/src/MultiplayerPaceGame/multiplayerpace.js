@@ -85,10 +85,10 @@ let infoTimer = 0;
 // ------------------------------- PRELOAD ---------------------------------------
 function preload() {
   // ml5 HandPose model (flipped for webcam mirror effect)
-  handPose = ml5.handPose({ 
+  handPose = ml5.handPose({
     flipped: true,
     runtime: 'mediapipe',
-    solutionPath: '../lib/mediapipe/hands' 
+    solutionPath: '../lib/mediapipe/hands'
   });
   // Load word list
   words = loadStrings("../lib/words_alpha.txt");
@@ -164,7 +164,7 @@ function draw() {
   drawSpaceBackground(); // Black background with stars
 
   // State machine
-  if (currentState === "menu")      drawMenu();
+  if (currentState === "menu") drawMenu();
   else if (currentState === "room") drawRoom();      // Lobby
   else if (currentState === "countdown") drawCountdown();
   else if (currentState === "game") drawGame();
@@ -181,24 +181,144 @@ function draw() {
 
 // ------------------------ Background: star field --------------------------------
 function drawSpaceBackground() {
-  background(0); // Black space
-  noStroke();
-  if (!drawSpaceBackground.stars) {
-    drawSpaceBackground.stars = [];
+  background(0);
+
+  // --- One-time initialization ---
+  if (!drawSpaceBackground.init) {
+    noStroke();
+
+    // Stars
     const numStars = 200;
+    drawSpaceBackground.stars = new Array(numStars);
     for (let i = 0; i < numStars; i++) {
-      drawSpaceBackground.stars.push({
+      drawSpaceBackground.stars[i] = {
         x: random(width),
         y: random(height),
         size: random(1, 3),
-        phase: random(TWO_PI)
-      });
+        phase: random(TWO_PI),
+        speedX: random(-0.05, 0.05),
+        speedY: random(-0.05, 0.05)
+      };
     }
+
+    // Planets (pre-render with pixel loop, pixelDensity-aware)
+    const numPlanets = 6;
+    drawSpaceBackground.planets = new Array(numPlanets);
+
+    for (let i = 0; i < numPlanets; i++) {
+      // Ensure integer size (avoid fractional width/height)
+      const size = Math.round(random(50, 100));
+      const seed = random(1000);
+
+      // Color palette per planet (store RGBA arrays for faster writes)
+      const colors = {
+        water: [random(0, 150), random(50, 200), random(150, 255), 255],
+        land: [random(50, 200), random(50, 150), random(0, 100), 255],
+        ice: [random(180, 255), random(180, 255), random(180, 255), 255]
+      };
+
+      const pg = createGraphics(size, size); // 2D renderer
+      pg.noStroke();
+      pg.clear(); // start fully transparent
+
+      // Properly handle high-DPI buffers
+      const d = pg.pixelDensity();
+      pg.loadPixels();
+
+      const w = pg.width;
+      const h = pg.height;
+      const cx = w / 2;
+      const cy = h / 2;
+      const radius = size / 2;
+      const r2 = radius * radius;
+
+      const noiseScale = 0.02;
+
+      // Helper to write RGBA quickly
+      function writePixel(idx, rgba) {
+        pg.pixels[idx + 0] = rgba[0];
+        pg.pixels[idx + 1] = rgba[1];
+        pg.pixels[idx + 2] = rgba[2];
+        pg.pixels[idx + 3] = rgba[3];
+      }
+
+      // Iterate over *device* pixels (w*d by h*d) and map to logical coords
+      for (let y = 0; y < h * d; y++) {
+        const ly = y / d;              // logical y
+        const dy = ly - cy;
+        for (let x = 0; x < w * d; x++) {
+          const lx = x / d;            // logical x
+          const dx = lx - cx;
+          const idx = 4 * (y * w * d + x);
+
+          if (dx * dx + dy * dy <= r2) {
+            // Inside circle: pick terrain color via noise
+            const n = noise(dx * noiseScale + seed, dy * noiseScale + seed);
+            const rgba = n < 0.4 ? colors.water : (n < 0.7 ? colors.land : colors.ice);
+            writePixel(idx, rgba);
+          } else {
+            // Outside circle: keep transparent
+            pg.pixels[idx + 0] = 0;
+            pg.pixels[idx + 1] = 0;
+            pg.pixels[idx + 2] = 0;
+            pg.pixels[idx + 3] = 0;
+          }
+        }
+      }
+      pg.updatePixels();
+
+      drawSpaceBackground.planets[i] = {
+        x: random(width),
+        y: random(height),
+        size,
+        seed,
+        ring: random() < 0.3,
+        speedX: random(-0.02, 0.02),
+        speedY: random(-0.02, 0.02),
+        rotation: random(TWO_PI),
+        rotationSpeed: random(-0.005, 0.005),
+        gfx: pg // cached image with proper alpha
+      };
+    }
+
+    drawSpaceBackground.init = true;
   }
-  for (let s of drawSpaceBackground.stars) {
-    let alpha = map(sin(frameCount * 0.02 + s.phase), -1, 1, 100, 255);
+
+  // --- Stars ---
+  const stars = drawSpaceBackground.stars;
+  noStroke();
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    const alpha = 100 + 155 * (0.5 + 0.5 * sin(frameCount * 0.02 + s.phase));
     fill(255, alpha);
     ellipse(s.x, s.y, s.size, s.size);
+    s.x = (s.x + s.speedX + width) % width;
+    s.y = (s.y + s.speedY + height) % height;
+  }
+
+  // --- Planets ---
+  const planets = drawSpaceBackground.planets;
+  imageMode(CENTER); // draw planet from its center
+  for (let i = 0; i < planets.length; i++) {
+    const p = planets[i];
+
+    push();
+    translate(p.x, p.y);
+    rotate(p.rotation);
+    image(p.gfx, 0, 0);  // draw pre-rendered planet
+
+    if (p.ring) {
+      noFill();
+      stroke(200, 150);
+      strokeWeight(2);
+      ellipse(0, 0, p.size * 1.8, p.size * 1.2);
+      noStroke();
+    }
+    pop();
+
+    p.rotation += p.rotationSpeed;
+    p.x = (p.x + p.speedX + width) % width;
+    p.y = (p.y + p.speedY + height) % height;
   }
 }
 
@@ -591,11 +711,12 @@ function handleMQTTMessage(topic, message) {
 
       if (!players[senderId]) {
         // Create a placeholder for unknown player so we can show their hand
-        players[senderId] = { 
-          name: data.name ?? 'Player?', 
-          score: 0, 
-          ready: false, 
-          lastUpdate: Date.now() };
+        players[senderId] = {
+          name: data.name ?? 'Player?',
+          score: 0,
+          ready: false,
+          lastUpdate: Date.now()
+        };
       }
       players[senderId].remoteHand = {
         data: denormalizeHandForDraw(data.hand), // convert normalized → pixel coords
@@ -1131,7 +1252,7 @@ function publishHand() {
   client.publish(`game/rooms/${roomId}/hands/${playerId}`, JSON.stringify({
     playerId,
     name: players[playerId]?.name,
-    hand: norm, 
+    hand: norm,
     ts: Date.now()
   }));
 }

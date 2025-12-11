@@ -104,7 +104,7 @@ function preload() {
   handPose = ml5.handPose({
     flipped: true,
     runtime: 'mediapipe',
-    solutionPath: '/mediapipe/hands'
+    solutionPath: '../lib/mediapipe/hands'
   });
 
   words = loadStrings("../lib/words_alpha.txt");

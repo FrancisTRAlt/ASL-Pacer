@@ -1,6 +1,13 @@
-# ASL-Pacer
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/fa36fcac-cc4d-4041-839e-b79009e50371" alt="Logo" width="400" height="400">
+  
+  <h1 align="center"> Welcome to the ASL Pacer Repository</h1>
+  <p align="center">
+    A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js to perform Pose Estimation to determine the letter of the Alphabet.
+</div>
 
-A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js to perform Pose Estimation to determine the letter in the Alphabet.
+
+
 ### Table of Contents
 - [App Demo](#app-demo)
 - [Get Started](#get-started)

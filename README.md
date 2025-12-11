@@ -12,11 +12,12 @@ A Machine Learning game that captures ASL. It uses the Hand-pose Model in ml5.js
 # App Demo
 This demo below shows the high level idea of the game.
 <br>
+<br>
 This uses MQTT [mosquitto](https://mosquitto.org/) to perform online connectivity.
 This allows to see real-time data from other players (Player's hand points for example) as well as other data to validate the game flow.
-<br>
 Additionally, it uses Machine Learning to detect the Alphabet using ASL.
-![GameDemo](https://github.com/user-attachments/assets/afdfa07c-bfea-4062-9c6c-edee87ba9197)
+<br>
+<img src="https://github.com/user-attachments/assets/67270de5-ecf8-45f7-ac19-3f67fe8bc665" width="50%" />
 
 
 # Get Started

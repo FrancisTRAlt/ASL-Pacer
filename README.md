@@ -71,7 +71,7 @@ See [Supabase Documentation](https://supabase.com/docs) for more information of 
 ```
 
 #### Step 3: Arduino code (If you want to work with the Arduino)
-<i>The Arduino must be an "Arduino nano 33 ble". Please read the Arduino documentation to get started</i>
+<i>See the [Hardware Requirements](#hardware-requirements) before adding the code.</i>
 
 <br>
 

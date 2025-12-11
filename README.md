@@ -35,6 +35,16 @@ Here are the requirements in order to use this project.
 * [Supabase](https://supabase.com/) – Database and authentication
 * [Arduino](https://www.arduino.cc/) – Hardware integration
 
+## Hardware Requirements
+Hardware Requirements for this project if you want to use an Arduino.
+| Component |
+|-----------|
+| Arduino Nano 33 BLE Sense lite |
+| TinyML Shield |
+| Grove LCD 16x2 (White on Blue) |
+| LCD Button |
+| USB Webcam |
+
 ## Installation
 
 A step by step guide that will tell you how to get the development environment up and running for this project.

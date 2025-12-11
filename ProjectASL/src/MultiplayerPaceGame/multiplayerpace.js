@@ -1,4 +1,3 @@
-
 /**
  * ASL Multiplayer (p5.js + ml5.js + MQTT over WebSockets)
  *
@@ -86,7 +85,11 @@ let infoTimer = 0;
 // ------------------------------- PRELOAD ---------------------------------------
 function preload() {
   // ml5 HandPose model (flipped for webcam mirror effect)
-  handPose = ml5.handPose({ flipped: true });
+  handPose = ml5.handPose({ 
+    flipped: true,
+    runtime: 'mediapipe',
+    solutionPath: '../lib/mediapipe/hands' 
+  });
   // Load word list
   words = loadStrings("../lib/words_alpha.txt");
 }
@@ -133,8 +136,6 @@ function setup() {
   video.size(800, 600);
   video.hide();
 
-  // ML backend + classifier
-  ml5.setBackend("webgl");
   classifier = ml5.neuralNetwork({ task: "classification" });
   classifier.load({
     model: "../ml5Model/model.json",
@@ -222,7 +223,7 @@ function drawMenu() {
   textAlign(CENTER, CENTER);
   textSize(36);
   fill(255);
-  text("ASL Multiplayer Lobby", width / 2, height / 2 - 180);
+  text("Multiplayer", width / 2, height / 2 - 180);
 
   // Panel
   fill(50, 50, 50, 180);
@@ -590,7 +591,11 @@ function handleMQTTMessage(topic, message) {
 
       if (!players[senderId]) {
         // Create a placeholder for unknown player so we can show their hand
-        players[senderId] = { name: `Player?`, score: 0, ready: false, lastUpdate: Date.now() };
+        players[senderId] = { 
+          name: data.name ?? 'Player?', 
+          score: 0, 
+          ready: false, 
+          lastUpdate: Date.now() };
       }
       players[senderId].remoteHand = {
         data: denormalizeHandForDraw(data.hand), // convert normalized → pixel coords
@@ -1124,7 +1129,10 @@ function publishHand() {
   if (!norm) return;
 
   client.publish(`game/rooms/${roomId}/hands/${playerId}`, JSON.stringify({
-    playerId, hand: norm, ts: Date.now()
+    playerId,
+    name: players[playerId]?.name,
+    hand: norm, 
+    ts: Date.now()
   }));
 }
 

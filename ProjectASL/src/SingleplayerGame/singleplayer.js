@@ -163,9 +163,6 @@ function setup() {
   video.size(800, 600);
   video.hide();
 
-  // *** (TF-only; not needed with MediaPipe) ***
-  // ml5.setBackend("webgl");
-
   // Neural network setup
   let classifierOptions = { task: "classification" };
   classifier = ml5.neuralNetwork(classifierOptions);

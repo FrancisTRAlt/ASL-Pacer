@@ -677,6 +677,17 @@ function drawGameOver() {
 }
 
 function restartGame() {
+  countdownStartTime = null;
+  startTime = null;
+  coinsPaid = 0;
+  pausedTime = 0; // total time paused
+  checkpointStartTime = 0;
+
+  // Checkpoints
+  checkpointsReached = 0;
+  checkpointInterval = 60000; // 1 minute
+  nextCheckpointElapsed = null;
+  
   playerScore = 0;
   player.health = player.maxHealth; // Reset HP
   player.coins = 0; // Reset coins

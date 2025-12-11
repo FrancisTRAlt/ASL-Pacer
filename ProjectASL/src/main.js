@@ -15,20 +15,25 @@ function isOnline() {
 // ===================== 
 let buttons = []; 
 let currentPage = "loading"; 
-const backgroundColor = "#0066dbff"; 
+const backgroundColor = "#0066dbff";
+
 // Loading screen state 
 let isLoading = true; 
 let progress = 0; 
-let targetProgress = 0; 
+let targetProgress = 0;
+
 // Fade transition state 
 let isFading = false; 
-let fadeAlpha = 0; 
-// leaderboard data 
+let fadeAlpha = 0;
+
+// leaderboard data
 let aslLeaderboardData = []; 
-let supabaseClient = null; 
+let supabaseClient = null;
+
 // --- Connectivity --- 
 let offlineMode = false; // true when isOnline() === false 
-let musicControlsVisible = false; // track if URL controls are visible 
+let musicControlsVisible = false; // track if URL controls are visible
+
 // --- MUSIC HUD --- 
 let bgMusic = null; // facade provided by index.html 
 const musicUI = { 
@@ -39,10 +44,12 @@ const musicUI = {
   btnSize: 40, 
   playRect: { x: 0, y: 0, w: 40, h: 40 }, 
   muteRect: { x: 0, y: 0, w: 40, h: 40 } 
-}; 
+};
+
 // --- MUSIC URL CONTROLS (DOM on main menu) --- 
 let ytUrlInput = null; 
-let ytUrlLoadBtn = null; 
+let ytUrlLoadBtn = null;
+
 // ---------------- AUDIO VISUALIZER (Title bar) ---------------- 
 let visualizerActive = false; 
 let audioAnalyser = null; 
@@ -90,7 +97,8 @@ function initAudioAnalyzer() {
   } 
   visualizerMode = "synthetic"; 
   return false; 
-} 
+}
+
 function updateVisualizerState() { 
   const playing = !offlineMode && bgMusic && bgMusic.ready && !bgMusic.isPaused(); 
   visualizerActive = !!playing; 
@@ -102,7 +110,8 @@ function updateVisualizerState() {
       audioCtx.resume().catch(() => {}); 
     } 
   } 
-} 
+}
+
 function drawTitleAudioVisualizer() { 
   if (offlineMode || !visualizerActive) return; 
   // Title banner area (compact): 
@@ -156,8 +165,12 @@ function drawTitleAudioVisualizer() {
   strokeWeight(2); 
   line(0, glowY, width, glowY); 
   pop(); 
-} 
-// ------------- BUTTON CLASS (Same visuals as singleplayer.js) ------------- 
+}
+
+
+
+
+// ------------- BUTTON CLASS ------------- 
 class Button { 
   constructor(x, y, w, h, label, callback, opts = {}) { 
     this.x = x; 
@@ -201,7 +214,11 @@ class Button {
 } 
 function getVisibleButtons() { 
   return buttons.filter(b => b.visible); 
-} 
+}
+
+
+
+
 // ---------------------- SETUP ---------------------- 
 async function setup() { 
   createCanvas(800, 600); 
@@ -225,7 +242,11 @@ async function setup() {
   progress = 0; 
   targetProgress = 100; // go straight to 100% 
   currentPage = "loading"; 
-} 
+}
+
+
+
+
 // ---------------------- DRAW ---------------------- 
 function draw() { 
   // Refresh offline state every frame (handles mid-session changes or test override) 
@@ -315,7 +336,11 @@ function draw() {
     fill(0, fadeAlpha); 
     rect(0, 0, width, height); 
   } 
-} 
+}
+
+
+
+
 // ---------------------- MENU BACKGROUND ---------------------- 
 function drawSpaceBackground() { 
   background(0); 
@@ -337,7 +362,11 @@ function drawSpaceBackground() {
     fill(255, alpha); 
     ellipse(s.x, s.y, s.size, s.size); 
   } 
-} 
+}
+
+
+
+
 // ---------------------- LOADING SCREEN ---------------------- 
 function drawLoadingScreen() { 
   drawSpaceBackground(); 
@@ -356,7 +385,11 @@ function drawLoadingScreen() {
   fill(255); 
   textSize(20); 
   text(`${progress.toFixed(1)}%`, width / 2, barY + barHeight + 25); 
-} 
+}
+
+
+
+
 // ---------------------- TITLE (COMPACT) ---------------------- 
 function drawTitle() { 
   push(); 
@@ -384,24 +417,34 @@ function drawTitle() {
   // Audio visualizer overlay inside title bar (only when playing & online) 
   drawTitleAudioVisualizer(); 
   pop(); 
-} 
+}
+
+
+
+
 // ---------------------- BUTTONS ---------------------- 
 function drawButtons() { 
   buttons.forEach(btn => btn.show()); 
-} 
+}
+
+
+
+
 // ---------------------- BUTTON SETUP ---------------------- 
 function setupMenuButtons() { 
   buttons = [ 
     new Button(width / 2 - 100, height / 2 - 100, 200, 80, "Start Game", () => showGameOptions()), 
     new Button(width / 2 - 100, height / 2, 200, 80, "Credits", () => showCredits()) 
   ]; 
-} 
+}
+
 function showCredits() { 
   currentPage = "credits"; 
   buttons = [ 
     new Button(width / 2 - 100, height / 2, 200, 80, "Back", () => { currentPage = "menu"; setupMenuButtons(); }) 
   ]; 
-} 
+}
+
 function showGameOptions() { 
   currentPage = "gameOptions"; 
   buttons = [ 
@@ -413,8 +456,12 @@ function showGameOptions() {
     ), 
     new Button(width / 2 - 100, height / 2, 200, 80, "Back", () => { currentPage = "menu"; setupMenuButtons(); }) 
   ]; 
-} 
-// ---------------------- SINGLEPLAYER (ASL Survival) 
+}
+
+
+
+
+// ---------------------- SINGLEPLAYER 
 function showSinglePlayerInstruc() { 
   currentPage = "singlePlayerInstruc"; 
   buttons = [ 
@@ -434,7 +481,8 @@ function showSinglePlayerInstruc() {
       showASLLeaderboard(); 
     }) 
   ]; 
-} 
+}
+
 function drawSinglePlayerInstructions() { 
   fill(0, 180); 
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20); 
@@ -442,8 +490,12 @@ function drawSinglePlayerInstructions() {
   fill(255); 
   textSize(28); 
   text("\nSurvive by collecting coins. \n For each minute, you have to pay a fee. \n Failure to do so will make you lose HP.", width / 2, height / 2 - 100); 
-} 
-// ---------------------- MULTIPLAYER (ASL Pacer) 
+}
+
+
+
+
+// ---------------------- MULTIPLAYER
 function showMultiASLInstruc() { 
   currentPage = "MultiASLInstruc"; 
   buttons = [ 
@@ -461,7 +513,8 @@ function showMultiASLInstruc() {
       showGameOptions(); 
     }) 
   ]; 
-} 
+}
+
 function drawMultiASLInstructions() { 
   fill(0, 180); 
   rect(width / 2 - 300, height / 2 - 200, 600, 250, 20); 
@@ -469,14 +522,19 @@ function drawMultiASLInstructions() {
   fill(255); 
   textSize(28); 
   text("\nYou have 60 seconds to spell as many words\n as you can in ASL against others.\n\n Internet is required.", width / 2, height / 2 - 100); 
-} 
-// ---------------------- LEADERBOARDS ---------------------- 
+}
+
+
+
+
+// ---------------------- LEADERBOARD ---------------------- 
 async function loadConfigAndInitSupabase() { 
   const response = await fetch('config.json'); 
   const config = await response.json(); 
   supabaseClient = supabase.createClient(config.supabase.url, config.supabase.anonKey); 
   console.log('Supabase initialized'); 
-} 
+}
+
 async function fetchLeaderboard() { 
   const { data, error } = await supabaseClient 
     .from('ASL-DataBase') 
@@ -487,18 +545,18 @@ async function fetchLeaderboard() {
     return []; 
   } 
   return data; 
-} 
+}
+
 function showASLLeaderboard() { 
   currentPage = "aslLeaderboard"; 
   buttons = [ 
-    new Button(width / 2 - 100, height - 100, 200, 60, "Back", () => { showSinglePlayerInstruc(); }) 
+    new Button(width / 2 - 100, height / 2 + 175, 200, 80, "Back", () => { showSinglePlayerInstruc(); }) 
   ]; 
-} 
+}
 
 // === COMPACTER LEADERBOARD CARD WITH SCROLL ===
 // Reduced height so bottom buttons don't overlap.
 let leaderboardScrollRow = 0; // integer row offset (top visible row)
-
 function drawASLLeaderboard() {
   // Card geometry (smaller height + slight upward offset)
   const cardW = 620;
@@ -541,7 +599,7 @@ function drawASLLeaderboard() {
   // Small status / subtitle
   textSize(11);
   fill(180);
-  text("Ranked by miles", width / 2, titleY + 18);
+  text("Ranked by miles (Words Completed)", width / 2, titleY + 18);
   pop();
 
   // Offline safeguard
@@ -700,8 +758,10 @@ function drawASLLeaderboard() {
   }
 }
 
-// --- Helpers ---
 
+
+
+// --- Helpers ---
 // Compute x + width for each column from relative widths.
 function computeColumnPositions(x, totalW, cols) {
   const arr = [];
@@ -758,6 +818,9 @@ function formatNumber(n) {
     : String(num);
 }
 
+
+
+
 // ---------------------- UTILITIES ---------------------- 
 function drawOnlineStatus() { 
   const online = isOnline(); 
@@ -772,7 +835,8 @@ function drawOnlineStatus() {
   textSize(24); 
   text(status, x + boxWidth / 2, y + boxHeight / 2); 
   return online; 
-} 
+}
+
 function drawOfflineBanner() { 
   const w = 260, h = 28; 
   const x = width - w - 20; 
@@ -783,7 +847,8 @@ function drawOfflineBanner() {
   textAlign(CENTER, CENTER); 
   textSize(14); 
   text("Offline Mode – features limited", x + w / 2, y + h / 2); 
-} 
+}
+
 function parseYouTubeVideoId(url) { 
   try { 
     const u = new URL(url.trim()); 
@@ -799,7 +864,8 @@ function parseYouTubeVideoId(url) {
     const m = url.match(/(?:v=\|\/embed\/\|youtu\.be\/\|\/shorts\/)([A-Za-z0-9_\-]{6,})/); 
     return m ? m[1] : null; 
   } 
-} 
+}
+
 function showMusicUrlControls() { 
   if (offlineMode) return; // safeguard: do not create/show controls when offline 
   if (!ytUrlInput) { 
@@ -856,11 +922,13 @@ function showMusicUrlControls() {
   ytUrlLoadBtn.position(inputX + inputW + spacing, inputY); 
   ytUrlInput.show(); 
   ytUrlLoadBtn.show(); 
-} 
+}
+
 function destroyMusicUrlControls() { 
   if (ytUrlInput) ytUrlInput.hide(); 
   if (ytUrlLoadBtn) ytUrlLoadBtn.hide(); 
-} 
+}
+
 function drawMusicHUD() { 
   if (offlineMode) return; // safeguard: do not draw HUD when offline 
   const ready = bgMusic && bgMusic.ready; 
@@ -896,10 +964,12 @@ function drawMusicHUD() {
     textAlign(LEFT, BASELINE); 
     text("loading…", p.x + 12, p.y + p.panelH - 12); 
   } 
-} 
+}
+
 function pointInRect(px, py, r) { 
   return (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h); 
-} 
+}
+
 function tryToggleMusicAt(px, py) { 
   if (offlineMode) return; // safeguard: block interactions when offline 
   if (!bgMusic || !bgMusic.ready) return; 
@@ -923,7 +993,11 @@ function tryToggleMusicAt(px, py) {
     bgMusic.setMuted(willMute); 
     if (bgMusic.setVolume) bgMusic.setVolume(willMute ? 0 : 100); 
   } 
-} 
+}
+
+
+
+
 // ---------------------- MOUSE CLICK / WHEEL ---------------------- 
 function mousePressed() { 
   // Music HUD toggles (skip in offline mode) 

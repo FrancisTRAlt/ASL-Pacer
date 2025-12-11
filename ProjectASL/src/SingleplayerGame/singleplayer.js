@@ -1,4 +1,3 @@
-
 // ------------------------------------------------
 // OFFLINE MODE SAFEGUARDS (refs: main.js style)
 // ------------------------------------------------
@@ -26,7 +25,6 @@ let lastMatchTime = 0;
 let isClassifying = false; // prevent overlapping classify calls
 let finalizing = false;     // guard against double finalization
 let connections;
-
 const fingers = {
   thumb: ["thumb_cmc", "thumb_mcp", "thumb_ip", "thumb_tip"],
   index: ["index_finger_mcp", "index_finger_pip", "index_finger_dip", "index_finger_tip"],
@@ -92,11 +90,14 @@ async function initSupabase() {
   console.log('Supabase initialized in singleplayer');
 }
 
+
+
+
 // ------------------------------------------------
 // PRELOAD
 // ------------------------------------------------
 function preload() {
-  // *** PATCH: Use MediaPipe runtime and local solutionPath for offline ***
+  // *** Use MediaPipe runtime and local solutionPath for offline ***
   // This prevents tfhub fetches when offline (ERR_INTERNET_DISCONNECTED).
   // Ref: ml5 next-gen runtime differences + offline model options.
   // https://github.com/ml5js/ml5-next-gen/issues/237
@@ -109,6 +110,9 @@ function preload() {
 
   words = loadStrings("../lib/words_alpha.txt");
 }
+
+
+
 
 // ------------------------------------------------
 /* SETUP */
@@ -159,7 +163,7 @@ function setup() {
   video.size(800, 600);
   video.hide();
 
-  // *** PATCH: REMOVE TF.js backend selection (TF-only; not needed with MediaPipe) ***
+  // *** (TF-only; not needed with MediaPipe) ***
   // ml5.setBackend("webgl");
 
   // Neural network setup
@@ -192,6 +196,9 @@ function setup() {
   }
 }
 
+
+
+
 // ------------------------------------------------
 // DRAW
 // ------------------------------------------------
@@ -214,12 +221,11 @@ function draw() {
     }
   }
 
-  // Online/Offline HUD
-  drawOnlineStatus();
-  if (offlineMode) drawOfflineBanner();
-
   // Update button visibility based on state
   if (currentState === "menu") {
+    // Online/Offline HUD
+    drawOnlineStatus();
+    if (offlineMode) drawOfflineBanner();
     drawMenu();
   } else if (currentState === "arduino") {
     drawArduinoPage();
@@ -243,6 +249,9 @@ function draw() {
   fill(arduinoConnected ? "lime" : "red");
   text(arduinoConnected ? "Arduino Connected" : "Arduino Disconnected", width - 20, height - 20);
 }
+
+
+
 
 // ------------------------------------------------
 // MAIN MENU
@@ -287,6 +296,9 @@ function drawMenu() {
     .forEach(btn => { btn.visible = true; btn.show(); });
 }
 
+
+
+
 // ------------------------------------------------
 // ARDUINO SETUP
 // ------------------------------------------------
@@ -322,7 +334,7 @@ async function listenToArduino() {
       // or "DOMException: ReadableStream" when cancelling—safe to ignore.
       console.warn("Reader loop ended:", err?.message ?? err);
     } finally {
-      try { reader.releaseLock(); } catch {}
+      try { reader.releaseLock(); } catch { }
       arduinoReader = null; // clear reference
     }
   }
@@ -362,6 +374,9 @@ function drawArduinoPage() {
   }
 }
 
+
+
+
 // ------------------------------------------------
 // COUNTDOWN
 // ------------------------------------------------
@@ -389,6 +404,9 @@ function drawCountdown() {
     startTime = millis();
   }
 }
+
+
+
 
 // ------------------------------------------------
 // GAME
@@ -557,6 +575,9 @@ function applyPenalty(coinDebt) {
   }
 }
 
+
+
+
 // ------------------------------------------------
 // GAME OVER
 // ------------------------------------------------
@@ -664,6 +685,9 @@ function restartGame() {
   startCountdown();
 }
 
+
+
+
 // ------------------------------------------------
 // BUTTON CLASS
 // ------------------------------------------------
@@ -698,6 +722,9 @@ class Button {
   }
 }
 
+
+
+
 // ------------------------------------------------
 // MOUSE CLICK
 // ------------------------------------------------
@@ -712,6 +739,9 @@ function mousePressed() {
     }
   }
 }
+
+
+
 
 // ------------------------------------------------
 /* CALLBACKS */
@@ -894,7 +924,7 @@ function modelLoaded() {
           // Some browsers throw when canceling an already-stalled reader; safe to ignore
           console.debug("Reader cancel:", e?.message ?? e);
         }
-        try { arduinoReader.releaseLock(); } catch {}
+        try { arduinoReader.releaseLock(); } catch { }
         arduinoReader = null;
       }
 
@@ -918,7 +948,7 @@ function modelLoaded() {
       // Fallback: ensure state isn’t stuck
       try {
         if (arduinoPort) await arduinoPort.close();
-      } catch {}
+      } catch { }
       arduinoConnected = false;
       arduinoPort = null;
       arduinoReader = null;
@@ -927,10 +957,13 @@ function modelLoaded() {
   buttons.push(new Button(width / 2 - 100, height / 2 + 200, 200, 60, "Back", () => {
     currentState = "menu";
   }));
-  buttons.push(new Button(width / 2 - 120, height / 2 + 120, 240, 60, "Pay 1 Coin", () => {
+  buttons.push(new Button(width / 2 - 100, height / 2 + 120, 200, 60, "Pay 1 Coin", () => {
     payCoinLogic();
   }));
 }
+
+
+
 
 // ------------------------------------------------
 // HAND DATA
@@ -1127,8 +1160,8 @@ function finalizeWord() {
   letterSpeeds = [];
   playerScore++;
 
-  // Reward coins based on word length (same logic you had)
-  player.coins += currentWord.length <= 4 ? 1 : 2;
+  // Reward coin
+  player.coins += 1
 
   // Send update to Arduino (safe try/catch)
   if (arduinoConnected && arduinoPort && arduinoPort.writable) {
@@ -1170,6 +1203,9 @@ function payCoinLogic() {
     applyPenalty(requiredCoins - coinsPaid);
   }
 }
+
+
+
 
 // ------------------------------------------------
 // ONLINE STATUS / OFFLINE BANNER (UI mirrors main.js)

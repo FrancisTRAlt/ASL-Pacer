@@ -158,7 +158,7 @@ This will give you an exe file in the "src-tauri" folder. (Assume the user is in
 
 # Training the Model
 
-This is built using ml5.js and p5.js to perform Pose Estimation for each letter. Collected a total of 54,000 Pose Estimation data (2000 for each letter. For "X", it is 4000. For "Y" it is 6000).
+This is built using ml5.js and p5.js to perform Pose Estimation for each letter (A-Z excluding "J" and "Z"). Collected a total of 54,000 Pose Estimation data (2000 for each letter. For "X", it is 4000. For "Y" it is 6000).
 The settings I used to train the model:
 ```
 epoch = 1000;

@@ -24,7 +24,7 @@ This uses MQTT [mosquitto](https://mosquitto.org/) to perform online connectivit
 This allows to see real-time data from other players (Player's hand points for example) as well as other data to validate the game flow.
 Additionally, it uses Machine Learning to detect the Alphabet using ASL.
 <br>
-<img src="https://github.com/user-attachments/assets/67270de5-ecf8-45f7-ac19-3f67fe8bc665" width="50%" />
+<img src="https://github.com/user-attachments/assets/67270de5-ecf8-45f7-ac19-3f67fe8bc665" width="70%" />
 
 
 # Get Started

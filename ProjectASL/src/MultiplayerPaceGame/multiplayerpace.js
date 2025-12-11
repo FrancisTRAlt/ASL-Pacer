@@ -177,6 +177,7 @@ function draw() {
 
   // HUD: player count
   drawPlayerCount();
+  drawUsernameHUD();
 }
 
 // ------------------------ Background: star field --------------------------------
@@ -320,6 +321,46 @@ function drawSpaceBackground() {
     p.x = (p.x + p.speedX + width) % width;
     p.y = (p.y + p.speedY + height) % height;
   }
+}
+
+
+// ──────────────────────────────────────────────────────────────
+// HUD: top-left username (persistent, style-safe)
+// ──────────────────────────────────────────────────────────────
+function drawUsernameHUD() {
+  if (!playerName) return;
+
+  // Draw after everything else, but keep styles local
+  push();
+
+  // Defensive reset of modes that can affect geometry and text
+  rectMode(CORNER);
+  textAlign(LEFT, TOP);
+  textSize(20);
+  textStyle(NORMAL);
+  noStroke();
+
+  // Label; you can change to just `playerName` if preferred
+  const label = `@ ${playerName}`;
+
+  // Measure text width in current font/size
+  const w = textWidth(label);
+  const h = 24;               // reasonably matches textSize(20)
+  const padX = 12;
+  const padY = 8;
+  const boxX = 12;
+  const boxY = 12;
+
+  // Semi-transparent dark background (alpha 180/255)
+  // Using explicit RGBA avoids weirdness from colorMode changes elsewhere
+  fill(50, 50, 50, 180);
+  rect(boxX, boxY, w + padX * 2, h + padY * 2, 10);
+
+  // Text on top
+  fill(255);                  // solid white text
+  text(label, boxX + padX, boxY + padY);
+
+  pop();
 }
 
 // ---------------------------------- MENU ----------------------------------------

@@ -203,7 +203,7 @@ ml5.handPose({ runtime: "mediapipe" }, { flipped: true });
 - This project satisfy the course "SEIS 744: IoT with Machine Learning".
 
 
-## Contribution
+# Contribution
 
 If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
 Don't forget to give the project a star! Thanks again!

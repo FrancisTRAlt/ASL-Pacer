@@ -44,7 +44,7 @@ Hardware Requirements for this project if you want to use an Arduino.
 | TinyML Shield |
 | Grove LCD 16x2 (White on Blue) |
 | LCD Button |
-| USB Webcam |
+| USB Webcam (PC) |
 
 ## Installation
 

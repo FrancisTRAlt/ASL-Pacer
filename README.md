@@ -18,7 +18,7 @@
 
 
 # App Demo
-This demo below shows the high level idea of the game.
+This demo below shows the main functionality of the game.
 <br>
 <br>
 This uses MQTT [mosquitto](https://mosquitto.org/) to perform online connectivity.
